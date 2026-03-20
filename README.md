@@ -1,4 +1,4 @@
-# AsusMerlin-WireGuard-Failover
+# Asuswrt-Merlin-Wireguard-Client-Failover
 
 ## Script to perform failover for Wireguard VPN clients. This script attempts to make sure the Wireguard VPN client is always connected to a server by performing various periodic connectivity tests.
 
@@ -25,8 +25,8 @@ How to setup:
 
          '/jffs/configs/wgc-failover-client-*CLIENT NUMBER*-configs'
 
-    Both of these default paths can be overridden on the command line
-    Also, the Wireguard config file's full paths can be specified in the failover config
+    Both of these default paths can be overridden on the command line.
+    Also, the Wireguard config file's full paths can be specified in the failover config.
 
     Most command line arguments can be passed in the failover config to change settings
     for different Wireguard configs.
