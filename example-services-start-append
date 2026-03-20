@@ -1,5 +1,5 @@
 
 # add similar to your own /jffs/scripts/services-start file...
 
-/jffs/scripts/example-start-wgc-failover-all &
+/jffs/scripts/example-start-wgc-failover-all.sh &
 
