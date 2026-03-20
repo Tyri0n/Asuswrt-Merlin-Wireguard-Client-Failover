@@ -1,6 +1,8 @@
 # Asuswrt-Merlin-Wireguard-Client-Failover
 
-## Script to perform failover for Wireguard VPN clients. This script attempts to make sure the Wireguard VPN client is always connected to a server by performing various periodic connectivity tests.
+## Script to perform failover for Wireguard VPN clients
+
+## This script attempts to make sure the client is always connected to a server by performing various periodic connectivity tests and changes to a different client config should the running one fail
 
 This script builds upon ```https://github.com/MerryMens/AsusMerlin-WireGuard-Failover```, adding more connectivity checks, options, etc.
 
@@ -37,7 +39,7 @@ To start after a reboot:
     You need to run from this script from within '/jffs/scripts/services-start'.
 
     See 'example-services-start-append' for an example.
-    
+
     Make sure to run as a background process by ending the command line with '&'
 
 
