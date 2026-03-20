@@ -15,7 +15,7 @@ Basic usage:
 
 How to setup:
 
-    Copy wgc-failover to your router's /jffs/scripts folder
+    Copy wgc-failover to your router's '/jffs/scripts/' folder
 
     Copy the contents of example-failover-configs to your '/jffs/configs' folder and rename/edit as required.
 
@@ -25,7 +25,7 @@ How to setup:
     
     And here for the intended Wireguard client configs files listed in the corresponding failover config:
 
-         '/jffs/configs/wgc-failover-client-*CLIENT NUMBER*-configs'
+         '/jffs/configs/wgc-failover-client-*CLIENT NUMBER*-configs/'
 
     Both of these default paths can be overridden on the command line.
     Also, the Wireguard config file's full paths can be specified in the failover config.
@@ -36,7 +36,7 @@ How to setup:
 
 To start after a reboot:
 
-    You need to run from this script from within '/jffs/scripts/services-start'.
+    You need to run from within '/jffs/scripts/services-start'.
 
     See 'example-services-start-append' for an example.
 
