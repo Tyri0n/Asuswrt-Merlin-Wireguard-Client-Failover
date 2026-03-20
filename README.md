@@ -32,6 +32,13 @@ How to setup:
     for different Wireguard configs.
 
 
+To start after a reboot:
+
+    You need to run from this script from within '/jffs/scripts/services-start'.
+    See 'example-services-start-append' for an example.
+    Make sure to run as a background process by ending the command line with '&'
+
+
 Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
     -h, --help     Show these instructions
