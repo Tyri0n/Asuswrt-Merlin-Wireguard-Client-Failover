@@ -1,0 +1,711 @@
+#!/bin/sh
+
+# based on: https://github.com/MerryMens/AsusMerlin-WireGuard-Failover
+# added args, killswitch, wan(s)/ping/dns/curl tests, logic changes, filename changes, etc
+
+Log()
+{
+    echo ""; echo "====================================="
+    logger -s "$(echo -e $logPrefix"$@")" # echo -e so newlines work
+    echo "=================="
+}
+
+LogSlack()
+{
+    Log "$@"
+    if [ "$logSlackPath" != "" ]; then
+      escapedSlackMsg=$(echo $logPrefix"$@" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
+      $logSlackPath "$escapedSlackMsg" &> /dev/null &
+    fi
+}
+
+ParseArgs()
+{
+  fromClientConfig=$1
+  shift
+  echo "ParseArgs: fromClientConfig=$fromClientConfig $@"
+
+  echo arg count: $#
+  if [ $# -gt 1 ]; then
+    unset var
+
+    for arg in "${@:2}"; do
+      echo arg: $arg
+
+      if [[ ${arg:0:1} == '-' ]]; then
+          if [ $arg == "--reset" ]; then
+              SetDefaults
+          elif [ $arg == "--disablewan1check" ]; then
+            if [ $fromClientConfig -eq 0 ]; then
+              echo set disableWan1Check: 1
+              disableWan1Check=1
+            else
+              ArgCmdLineOnly $var $arg
+            fi
+          else
+            echo set var: \"$arg\"
+            var=$arg
+          fi
+      else
+          if [ -n "$var" ]; then
+            # this works but spams "bad number" # if [ $arg -eq $arg ]; then
+            if [ -z "${arg//[0-9]}" ]; then # this method would not recognise a negative number
+              if [ $var == "-k" ]; then
+                  echo set killswitch: $arg
+                  killswitch=$arg
+              elif [ $var == "-w" ]; then
+                  echo set hsWait: $arg
+                  hsWait=$arg
+              elif [ $var == "-t" ]; then
+                  echo set hsTimeout: $arg
+                  hsTimeout=$arg
+              elif [ $var == "-q" ]; then
+                  echo set quitOnNoInterface: $arg
+                  quitOnNoInterface=$arg
+              elif [ $var == "-p" ]; then
+                  echo set testPing: $arg
+                  testPing=$arg
+              elif [ $var == "-d" ]; then
+                  echo set testDns: $arg
+                  testDns=$arg
+              elif [ $var == "-c" ]; then
+                  echo set testCurl: $arg
+                  testCurl=$arg
+              elif [ $var == "-n" ]; then
+                  if [ $arg -lt 1 ]; then
+                    arg=1
+                  fi
+                  echo set logEveryNthHandshake: $arg
+                  logEveryNthHandshake=$arg
+              elif [ $var == "-a" ]; then
+                  echo set wanWait: $arg
+                  wanWait=$arg
+              else
+                LogSlack "unrecognised var \'$var\' - discarding that and arg \'$arg\'"
+                unset var
+              fi
+            else
+              if [ $var == "--failoverconfigpath" ]; then
+                if [ $fromClientConfig -eq 0 ]; then
+                  echo set failoverConfigPath: $arg
+                  failoverConfigPath=$arg
+                else
+                  ArgCmdLineOnly $var $arg
+                fi
+              elif [ $var == "--clientconfigdir" ]; then
+                if [ $fromClientConfig -eq 0 ]; then
+                  echo set clientConfigDir: $arg
+                  clientConfigDir=$arg
+                else
+                  ArgCmdLineOnly $var $arg
+                fi
+              elif [ $var == "--logslackpath" ]; then
+                if [ -f $arg ]; then
+                  echo set logSlackPath: $arg
+                  logSlackPath=$arg
+                else
+                  Log "logslackpath arg \'$arg\' file not found"
+                fi
+              elif [ $var == "-pt" ]; then
+                echo set pingTargets: $arg
+                pingTargets=$arg
+              elif [ $var == "-dt" ]; then
+                echo set nslookupTargets: $arg
+                nslookupTargets=$arg
+              elif [ $var == "-ct" ]; then
+                echo set curlTargets: $arg
+                pingTargets=$arg
+              else
+                LogSlack "param arg \'$arg\' for var \'$var\' is not a number - discarding both"
+              fi
+            fi
+          else
+            LogSlack "var is unset - discarding arg \'$arg\'"
+          fi
+          unset var
+      fi
+    done
+    if [ -n "$var" ]; then
+      LogSlack "var \'$var\' was not followed by param arg - discarded"
+    fi
+  fi
+}
+
+ArgCmdLineOnly()
+{
+  LogSlack "\'$1\' option is only valid from the command line' - discarding along with arg \'$2\'"
+}
+
+ArgFailoverConfigOnly()
+{
+  LogSlack "\'$1\' option is only valid from within the failover config' - discarding along with arg \'$2\'"
+}
+
+StartTimer()
+{
+  timerStart=$(date +%s)
+}
+
+StopTimer()
+{
+  # this caused script to silently exit, but only when run on boot
+  # added traps to try and catch, but they didn't
+  #Timer=$( date +%s --date="$timerStart seconds ago" )
+
+  timerEnd=$(date +%s)
+  Timer=$(( $timerEnd - $timerStart ))
+}
+
+ParamsString()
+{
+  echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait"
+}
+
+Exit()
+{
+  code=$1
+  shift
+  msg="EXITING:\n\texit code:\n\t\t$code\n\treason:\n\t\t""$@"
+  if [ -n "$upSince" ]; then
+    msg=$msg"\n\n\tfinal client config [$wgClientConfigFilePath], active since: $upSince\n "
+  fi
+  LogSlack $msg
+
+  # negative code means show usage before exit
+  if [ $code -ge 0 ]; then
+    exit $code
+  fi
+  ShowUsage $(( $code * -1 )) # can't exit with negative code
+}
+
+OnTrap()
+{
+  sig=$?
+  # why does ^C = 130?
+  trap - SIGHUP SIGINT SIGQUIT SIGKILL SIGSTOP SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
+  Exit 4 "trapped: $sig"
+}
+
+IsWanUp()
+{
+  if [ "$1" == "" ]; then
+    # calling with blank interface name
+    # returns DOWN but doesn't mofidy wanUp var
+    return 0
+  fi
+
+  wanUp=0
+  wan=$(ethtool $1 | grep "Link detected:" 2>&1)
+  echo "==== ethtool $wan0: $wan"
+  if [ "$wan" != "" ]; then
+    wan=`echo $wan | awk '{print $3}'`
+    echo "==== wan link test: $wan"
+    if [ "$wan" == "yes" ]; then
+      wanUp=1
+    fi
+  fi
+
+  if [ $wanUp -eq 1 ]; then
+    echo "=== wan $1 is UP"
+  else
+    echo "=== wan $1 is DOWN"
+  fi
+  return $wanUp
+}
+
+WagWan()
+{
+    wait=$1
+    
+    # check wan until it's up
+    wasDown=0
+    while true; do
+      IsWanUp $wan0
+      if [ $wanUp -eq 0 ]; then
+        if [ $disableWan1Check -eq 0 ] && [ "$wan1" != "" ]; then
+          IsWanUp $wan1
+        fi
+      fi
+
+      if [ $wanUp -eq 1 ]; then
+        # and we're done
+        break
+      fi
+
+      if [ $wasDown -eq 0 ]; then
+        wasDown=1
+        Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
+      fi
+      sleep $wait
+    done
+
+    # returns 1 if was found to be down previously in loop above
+    return $wasDown
+}
+
+
+readonly maxWgc=5
+
+# defaults
+readonly _killswitch=1
+readonly _hsWait=180
+readonly _hsTimeout=300
+readonly _quitOnNoInterface=0
+readonly _testPing=1
+readonly _testDns=1
+readonly _testCurl=1
+readonly _logEveryNthHandshake=10
+readonly _wanWait=30
+readonly _disableWan1Check=0
+
+readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
+readonly _nslookupTargets="google.com,amazon.com,cloudflare.com,facebook.com"
+readonly _curlTargets=$_nslookupTargets
+
+SetDefaults()
+{
+  echo SetDefaults
+  killswitch=$_killswitch
+  hsWait=$_hsWait
+  hsTimeout=$_hsTimeout
+  quitOnNoInterface=$_quitOnNoInterface
+  testPing=$_testPing
+  testDns=$_testDns
+  testCurl=$_testCurl
+  logEveryNthHandshake=$_logEveryNthHandshake
+  wanWait=$_wanWait
+  disableWan1Check=$_disableWan1Check
+
+  pingTargets=$_pingTargets
+  nslookupTargets=$_nslookupTargets
+  curlTargets=$_curlTargets
+}
+
+ShowUsage()
+{
+  echo ""
+  echo "Usage: wgc-failover [Client Number <1 to $maxWgc>] [Options...]"
+  echo ""
+  echo " -h, --help     Show these instructions"
+  echo ""
+  echo " -k <0/1>       Enable killswitch                 (default: $_killswitch)"
+  echo " -w <Seconds>   Wait between handshake checks     (default: $_hsWait)"
+  echo " -t <Seconds>   Handshake timeout                 (default: $_hsTimeout)"
+  echo " -q <0/1>       Quit on interface not found       (default: $_quitOnNoInterface)"
+  echo " -p <0/1>       Test ping                         (default: $_testPing)"
+  echo " -d <0/1>       Test DNS                          (default: $_testDns)"
+  echo " -c <0/1>       Test curl                         (default: $_testCurl)"
+  echo " -n <Amount>    Log every Nth handshake           (default: $_logEveryNthHandshake)"
+  echo " -a <Seconds>   Wait between WAN checks when down (default: $_wanWait)"
+  echo ""
+  echo " -pt <\"IP,...\">   Comma-separated list of IP addresses for ping test in quotes"
+  echo "                      (default: \"$_pingTargets\")"
+  echo " -dt <\"URL,...\">  Comma-separated list of URLS for DNS test in quotes"
+  echo "                      (default: \"$_nslookupTargets\")"
+  echo " -ct <\"URL,...\">  Comma-separated list of URLs for curl test in quotes"
+  echo "                      (default: \"$_curlTargets\")"
+  echo ""
+  echo " --reset        Resets any of the previous args shown above to"
+  echo "                their default values (also shown above)"
+  echo ""
+  echo " --logslackpath   Path to shell script to pass priority logs to"
+  echo ""
+  echo " [Options...] can also be specified per client config in failover config files (on previous line)"
+  echo ""
+  echo "" Command line only:
+  echo ""
+  echo " --failoverconfigpath   Override the default path to the failover config"
+  echo "                        (from /jffs/configs/wgc-failover-[Client Number].conf)"
+  echo ""
+  echo " --clientconfigdir      Override the default configs directory path"
+  echo "                        (from /jffs/configs/wgc-failover-client-[Client Number]-configs)"
+  echo ""
+  echo " --disablewan1check     Don't check secondary WAN interface"
+  echo ""
+  if [ $# -eq 0 ]; then
+    exit 0
+  fi
+  exit $1
+}
+
+
+##############################################################################
+#cd /jffs/scripts
+logPrefix="wgc-failover: "
+
+# try and keep track of unexpected terminations
+trap OnTrap SIGHUP SIGINT SIGQUIT SIGKILL SIGSTOP SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
+
+if [ $# -eq 0 ] || [ $1 == "-h" ] || [ $1 == "--help" ]; then
+  ShowUsage
+fi
+
+SetDefaults
+# not reset by SetDefaults
+failoverConfigPath=""
+clientConfigDir=""
+logSlackPath=""
+
+LogSlack command line: \'$0 $@\'
+sleep 1
+
+# parse args
+#   - first is client number
+echo "client num arg is: $1"
+if [ $1 -eq $1 ] && [ $1 -gt 0 ] && [ $1 -le $maxWgc ]; then
+  echo set client num: $1
+  clientNum=$1
+else
+  Exit -1 "ARGUMENT FAIL: client number \'$1\' is invalid"
+fi
+wgc="wgc"$clientNum
+
+# fetch wan interface names
+wan0=$(nvram get wan0_ifname)
+wan1=$(nvram get wan1_ifname)
+
+logPrefix="wgc-failover[$clientNum]: "
+
+#   - optional switch/value pair args
+ParseArgs 0 $@
+
+# check overridden failover config path
+if [ "$failoverConfigPath" != "" ]; then
+    if ! [ -f $failoverConfigPath ]; then
+      Exit 6 "ARGUMENT/FILE FAIL: failover config path \'$failoverConfigPath\' is invalid"
+    fi
+fi
+
+# check overridden client configs dir
+if [ "$clientConfigDir" != "" ]; then
+    if ! [ -d $clientConfigDir ]; then
+      Exit 9 "ARGUMENT/FILE FAIL: client config dir \'$clientConfigDir\' is invalid"
+    fi
+fi
+
+# wait for wan up
+WagWan 15
+
+###########################################
+#### Wait for NTP to sync ####
+ntpCheckCounter=1
+ntpReadyMaxCheck=30000 # was only 10
+ntpCheckdDelay=30
+ntpReadyFlag=$(nvram get ntp_ready)
+
+while [ $ntpReadyFlag -eq 0 ]
+do
+  #### Exit script if NTP sync fails ####
+  if [ $ntpCheckCounter -gt $ntpReadyMaxCheck ]
+  then
+    Exit 2 "NTP failed to sync time in $(($ntpCheckdDelay*$ntpReadyMaxCheck)) secs, fix the issue and reboot the router"
+  else
+    Log "NTP ready Check $ntpCheckCounter: Waiting for NTP to sync, checking again in $ntpCheckdDelay secs"
+    sleep $ntpCheckdDelay
+    ntpReadyFlag=$(nvram get ntp_ready)
+    ntpCheckCounter=$((ntpCheckCounter+1))
+  fi
+done
+
+#### Continue the script after NTP sync is complete ####
+Log "NTP sync is complete"
+
+
+# figure out config paths
+
+if [ "$failoverConfigPath" != "" ]; then
+  wgFailoverConfigFilePath=$failoverConfigPath
+else
+  wgFailoverConfigFilePath="/jffs/configs/wgc-failover-$clientNum.conf"  
+
+  if ! [ -f $wgFailoverConfigFilePath ]; then
+    Exit 7 "FILE FAIL: failover config path \'$wgFailoverConfigFilePath\' is invalid"
+  fi
+fi
+
+if [ "$clientConfigDir" != "" ]; then
+  wgClientConfigFilesDir=$clientConfigDir
+else
+  wgClientConfigFilesDir="/jffs/configs/wgc-failover-client-$clientNum-configs"
+
+  if ! [ -d $wgClientConfigFilesDir ]; then
+    Exit 10 "FILE FAIL: clients config dir \'$wgClientConfigFilesDir\' is invalid"
+  fi
+fi
+
+
+#### Run script forever ####
+while true
+do
+  LogSlack "Loading failover config: $wgFailoverConfigFilePath"
+  sleep 1
+
+  #### Read failover config file into variables ####
+  while read line
+  do
+    echo "=== line: $line"
+
+    # skip blank line
+    if [ "$line" == "" ]; then
+      continue
+    fi
+
+    fc=${line:0:1}
+    # if line starts with # it's a comment
+    if [[ $fc  == '#' ]]; then
+      continue
+    fi
+    # if line starts with dash then it's args
+    if [[ $fc  == '-' ]]; then
+      ParseArgs 1 "?" $line
+      continue
+    fi
+
+    if [ -n "$upSince" ]; then
+      LogSlack "previous client config was active since: $upSince"
+      unset upSince
+    fi
+
+    wgClientConfigFileName="$(echo $line | cut -d " " -f1)"
+    wgClientDescription="$(echo $line | cut -d " " -f2)"
+
+    # if wgClientConfigFileName starts with slash it's a full path
+    fc=${wgClientConfigFileName:0:1}
+    if [[ $fc  == '/' ]]; then
+      wgClientConfigFilePath=$wgClientConfigFileName
+      echo client filename is full path: $wgClientConfigFilePath
+    else
+      wgClientConfigFilePath=$wgClientConfigFilesDir/$wgClientConfigFileName
+    fi
+
+    if ! [ -f $wgClientConfigFilePath ]; then
+      ### Exit 8 "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid"
+
+      # try next config instead
+      LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next config"
+      continue
+    fi
+
+    LogSlack "Loading client config $wgClientConfigFilePath as $wgClientDescription\n\t"$(ParamsString)
+
+    # stop client before changing client settings in nvram
+    service "stop_wgc $clientNum"
+    sleep 3
+
+    #### Read Wireguard client config file into variables and generate nvram set commands ####
+    dnsServer=""
+    while read line
+    do
+      # skip blank line
+      if [ "$line" == "" ]; then
+        continue
+      fi
+
+      fc=${line:0:1}
+      # if line starts with # it's a comment
+      if [[ $fc  == '#' ]]; then
+        continue
+      fi
+
+      #### Remove spaces around equal sign to make formatting easy ####
+      if test "$line" != "${line%" = "*}"
+      then
+        lineFormatted="${line//" "/""}"
+        #### Generate nvram set commands from Wireguard client config file ####
+        if test "$lineFormatted" != "${lineFormatted%"Address"*}"
+        then
+          nvram set "$wgc"_addr="${lineFormatted#*=}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"Endpoint"*}"
+        then
+          endpointFull="${lineFormatted#*=}"
+          nvram set "$wgc"_ep_addr="${endpointFull%:*}"
+          nvram set "$wgc"_ep_port="${endpointFull#*:}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"PublicKey"*}"
+        then
+          nvram set "$wgc"_ppub="${lineFormatted#*=}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"PrivateKey"*}"
+        then
+          nvram set "$wgc"_priv="${lineFormatted#*=}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"PresharedKey"*}"
+        then
+          nvram set "$wgc"_psk="${lineFormatted#*=}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"AllowedIPs"*}"
+        then
+          nvram set "$wgc"_aips="${lineFormatted#*=}"
+        fi
+        if test "$lineFormatted" != "${lineFormatted%"DNS"*}"
+        then
+          dnsServer="${lineFormatted#*=}"
+          echo "==== dnsServer: $dnsServer"
+          nvram set "$wgc"_dns=$dnsServer
+        fi
+      fi
+    done < "$wgClientConfigFilePath"
+
+    #### Generate default nvram set commands ####
+    nvram set "$wgc"_desc="$wgClientDescription"
+    nvram set "$wgc"_alive=25
+    nvram set "$wgc"_enable=1
+    nvram set "$wgc"_fw=1
+    nvram set "$wgc"_nat=1
+    nvram set "$wgc"_enforce=$killswitch
+    
+    # start client
+    service "start_wgc $clientNum"
+    upSince=$(date)
+    sleep 3
+
+    #### Keep monitoring latest handshake, exit loop if it past threshold of x secs ####
+    lhs=0
+    unset wgShow
+    nhs=0
+
+    while true
+    do
+      # if wan interface down just stay here and check periodically
+      WagWan $wanWait
+      if [ $? -eq 1 ]; then
+        readonly wanUpAgainWait=15
+        LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, waiting $wanUpAgainWait seconds before continuing"
+        sleep $wanUpAgainWait
+      fi
+
+      fail=0
+      adv=$hsWait
+
+      wgShow=$(wg show $wgc latest-handshakes 2>&1)
+      echo "=== wg show $wgc latest-handshakes: $wgShow"
+
+      ifconfig=$(ifconfig $wgc 2>&1)
+      echo "=== ifconfig $wgc: $ifconfig"
+
+      # handle interface being shutdown, possibly in router ui
+      if [ "$wgShow" == "Unable to access interface: No such device" ] || [ "$ifconfig" == "ifconfig: $wgc: error fetching interface information: Device not found" ]; then
+        failMsg="INTERFACE FAIL: $wgc not found"
+        if [ $quitOnNoInterface -eq 0 ]; then
+          LogSlack "$failMsg - expiring current client config"
+          Log "$wgClientDescription: client config active since: "$upSince
+          break
+        else
+          Exit 3 "$failMsg (with quitOnNoInterface enabled)"
+        fi
+      fi
+
+      # calc how much time passed since last handshake
+      dateNow=$(date +%s);                        echo dateNow: $dateNow
+      dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $lhs
+      lhs=$(( $dateNow - $dateLhs ));             echo lhs: $lhs
+
+      # fail if lhs is nonsense
+      if [ -z $lhs ] || [ -z $dateLhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
+        LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
+        fail=1
+      fi
+
+      if [ $testPing -ne 0 ]; then
+        echo ""; echo "============= test ping ============="
+
+        # fail if no apparent internet access
+        StartTimer
+        pingOk=0
+        for ip in ${pingTargets//,/ }; do
+          echo ""; echo "=== pinging $ip..."; echo ""
+          ping -I $wgc -c 1 -w 1 $ip
+          if [ $? -eq 0 ]; then
+            pingOk=1
+            break
+          fi
+        done
+
+        StopTimer
+        adv=$(( $adv - $Timer ))
+
+        if [ $pingOk -eq 0 ]; then
+          LogSlack "pings failed"
+          fail=1
+        fi
+      fi
+
+      if [ $testDns -ne 0 ]; then
+        if [ "$dnsServer" != "" ]; then
+          echo ""; echo "============= test dns ============="
+
+          # fail if dns buggered
+          StartTimer
+          dnsOk=0
+          for domain in ${nslookupTargets//,/ }; do
+            echo ""; echo "=== looking up $domain via $dnsServer..."; echo ""
+            nslookup $domain $dnsServer
+            if [ $? -eq 0 ]; then
+              dnsOk=1
+              break
+            fi
+          done
+
+          StopTimer
+          adv=$(( $adv - $Timer ))
+
+          if [ $dnsOk -eq 0 ]; then
+            LogSlack "dns lookups failed"
+            fail=1
+          fi
+        fi
+      fi
+
+      if [ $testCurl -ne 0 ]; then
+        echo ""; echo "============= test curl ============="
+
+        # fail if all curls fail
+        StartTimer
+        curlOk=0
+        for domain in ${curlTargets//,/ }; do
+          echo ""; echo "=== curling $domain..."; echo ""
+          curl --interface $wgc $domain
+          if [ $? -eq 0 ]; then
+            curlOk=1
+            break
+          fi
+        done
+
+        StopTimer
+        adv=$(( $adv - $Timer ))
+
+        if [ $curlOk -eq 0 ]; then
+          LogSlack "curls failed"
+          fail=1
+        fi
+      fi
+
+      # failures can modify next handshake wait
+      if [ $fail = 1 ]; then
+        if [ $adv -lt 15 ]; then
+          adv=15
+        fi
+        LogSlack "CONNECTIVITY FAIL: reducing next handshake wait to $adv seconds"
+      fi
+
+      nhsm=$(( $nhs % $logEveryNthHandshake ))      
+      nhs=$(( $nhs + 1 ))
+      if [ $nhsm -eq 0 ]; then
+        Log "$wgClientDescription: handshake #$nhs was $lhs secs ago, client config active since: $upSince"
+      fi
+
+      # give up on this client config if out of action for too long
+      if [ $lhs -ge $hsTimeout ]; then
+        LogSlack "HANDSHAKE FAIL: stale value of $lhs secs >= $hsTimeout, switching to next client config"
+        break
+      fi
+
+      echo sleeping for $adv secs
+      sleep $adv
+    done
+
+  done < "$wgFailoverConfigFilePath"
+done
+
+Exit 5 "eof"

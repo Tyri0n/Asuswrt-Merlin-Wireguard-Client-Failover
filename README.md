@@ -1,29 +1,73 @@
 # AsusMerlin-WireGuard-Failover
 
-## Script to perform failover for wireguard client VPN. This script is a simple attempt to make sure the wireguard VPN client is always connected to a server by performing frequently monitoring latest handshake time checks.
+## Script to perform failover for Wireguard VPN clients. This script is attempts to make sure the Wireguard VPN client is always connected to a server by performing frequently various connectivity tests.
 
-This script is inspired by ```https://github.com/MartineauUK/VPN-Failover```, which I currently use for OpenVPN clients
+This script builds upon ```https://github.com/MerryMens/AsusMerlin-WireGuard-Failover```, adding more connectivity checks, options, etc.
+
+Basic usage:
+
+    Run '/jffs/scripts/wgc-failover 1', replacing '1' with your intended Wireguard client number
+
+    Running '/jffs/scripts/wgc-failover --help' will display the optional arguments
 
 
-Usage:
+How to setup:
 
-1. Login to the router admin colsole (WebUI - ```http://router.asus.com``` (or) whatever gateway address you have set for you router ```http://192.168.1.1``` or ```http://10.0.0.1``` ....) and make sure the JFFS custom scripts and SSH options are enabled under Administration&rarr;System
-2. SSH into router and place the shell script ```wg_vpn_failover.sh``` under ```/jffs/scripts/```
-3. Create a new folder called ```wg_vpn_config_files``` under ```/jffs/configs/``` and drop your wireguard client config files that you have downloaded from your VPN provider
-4. Under ```/jffs/scripts/``` create a new file called ```wg_vpn_failover_config``` and add enter the configurations that you want to failover to in the order you prefer (make sure the the config file name in the second column matches the exact files names under ```/jffs/configs/wg_vpn_config_files```), the third column is the short name for VPN client which will be shown as instance name.
-   
-Example:
-```
-1       PIA-Orlando.conf     PIA-Orlando
-2       Nord-Newyork.conf    Nord-Newyork
-3       PIA-Austin.conf PIA-Austin
-4       PIA-Denver.conf     PIA-Denver
-5       PIA-Boston.conf      PIA-Boston
-```
-5. Under /jffs/scripts/ edit the services-start file (if the file is not available create one) and enter the below lines
-``` sh
-#!/bin/sh
+    Copy wgc-failover to your router's /jffs/scripts folder
 
-sh /jffs/scripts/wg_vpn_failover.sh
-```
-6. Restart the router
+    Copy the contents of example-failover-configs to your '/jffs/configs' folder and rename/edit as required.
+
+    By default the script looks here for the failover config:
+    
+        '/jffs/configs/wgc-failover-client-*CLIENT NUMBER*-conf'
+    
+    And here for the intended Wireguard client configs files listed in the corresponding failover config:
+
+         '/jffs/configs/wgc-failover-client-*CLIENT NUMBER*-configs'
+
+    Both of these default paths can be overridden on the command line
+    Also, the Wireguard config file's full paths can be specified in the failover config
+
+    Most command line arguments can be passed in the failover config to change settings for different Wireguard configs.
+
+
+Usage: wgc-failover [Client Number <1 to 5>] [Options...]
+
+ -h, --help     Show these instructions
+
+ -k <0/1>       Enable killswitch                 (default: 1)
+ -w <Seconds>   Wait between handshake checks     (default: 180)
+ -t <Seconds>   Handshake timeout                 (default: 300)
+ -q <0/1>       Quit on interface not found       (default: 0)
+ -p <0/1>       Test ping                         (default: 1)
+ -d <0/1>       Test DNS                          (default: 1)
+ -c <0/1>       Test curl                         (default: 1)
+ -n <Amount>    Log every Nth handshake           (default: 10)
+ -a <Seconds>   Wait between WAN checks when down (default: 30)
+
+ -pt <"IP,...">   Comma-separated list of IP addresses for ping test in quotes
+                      (default: "8.8.8.8,1.1.1.1,9.9.9.9")
+ -dt <"URL,...">  Comma-separated list of URLS for DNS test in quotes
+                      (default: "google.com,amazon.com,cloudflare.com,facebook.com")
+ -ct <"URL,...">  Comma-separated list of URLs for curl test in quotes
+                      (default: "google.com,amazon.com,cloudflare.com,facebook.com")
+
+ --reset        Resets any of the previous args shown above to
+                their default values (also shown above)
+
+ --logslackpath   Path to shell script to pass priority logs to
+
+ [Options...] can also be specified per client config in failover config files (on previous line)
+
+ Command line only:
+
+ --failoverconfigpath   Override the default path to the failover config
+                        (from /jffs/configs/wgc-failover-[Client Number].conf)
+
+ --clientconfigdir      Override the default configs directory path
+                        (from /jffs/configs/wgc-failover-client-[Client Number]-configs)
+
+ --disablewan1check     Don't check secondary WAN interface
+
+
+

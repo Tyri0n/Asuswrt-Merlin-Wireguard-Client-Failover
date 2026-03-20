@@ -1,3 +1,5 @@
-#!/bin/sh
 
-sh /jffs/scripts/wg_vpn_failover.sh
+# add similar to your own /jffs/scripts/services-start file...
+
+/jffs/scripts/example-start-wgc-failover-all &
+
