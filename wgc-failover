@@ -6,7 +6,7 @@
 Log()
 {
     echo ""; echo "====================================="
-    logger -s "$(echo -e $logPrefix"$@")" # echo -e so newlines work
+    logger -c "$(echo -e $logPrefix"$@")" # echo -e so newlines work
     echo "=================="
 }
 
@@ -23,7 +23,7 @@ ParseArgs()
 {
   fromClientConfig=$1
   shift
-  echo "ParseArgs: fromClientConfig=$fromClientConfig $@"
+  echo "=== ParseArgs: fromClientConfig=$fromClientConfig $@"
 
   echo arg count: $#
   if [ $# -gt 1 ]; then
@@ -190,7 +190,7 @@ IsWanUp()
 {
   if [ "$1" == "" ]; then
     # calling with blank interface name
-    # returns DOWN but doesn't mofidy wanUp var
+    # returns DOWN but doesn't modify wanUp var
     return 0
   fi
 
@@ -207,10 +207,11 @@ IsWanUp()
 
   if [ $wanUp -eq 1 ]; then
     echo "=== wan $1 is UP"
-  else
-    echo "=== wan $1 is DOWN"
+    return 1
   fi
-  return $wanUp
+
+  echo "=== wan $1 is DOWN"
+  return 0
 }
 
 WagWan()
@@ -239,12 +240,17 @@ WagWan()
       sleep $wait
     done
 
-    # returns 1 if was found to be down previously in loop above
+    if [ $wasDown -eq 1 ]; then
+      LogSlack "CONNECTIVITY RECOVERY: WAN is back UP"
+    fi
+
+    # returns 1 if was found to be down previously, in loop above
     return $wasDown
 }
 
 
 readonly maxWgc=5
+readonly wanUpAgainWait=15
 
 # defaults
 readonly _killswitch=1
@@ -264,7 +270,7 @@ readonly _curlTargets=$_nslookupTargets
 
 SetDefaults()
 {
-  echo SetDefaults
+  echo "=== SetDefaults"
   killswitch=$_killswitch
   hsWait=$_hsWait
   hsTimeout=$_hsTimeout
@@ -351,7 +357,7 @@ sleep 1
 
 # parse args
 #   - first is client number
-echo "client num arg is: $1"
+echo "=== client num arg is: $1"
 if [ $1 -eq $1 ] && [ $1 -gt 0 ] && [ $1 -le $maxWgc ]; then
   echo set client num: $1
   clientNum=$1
@@ -473,7 +479,7 @@ do
     fc=${wgClientConfigFileName:0:1}
     if [[ $fc  == '/' ]]; then
       wgClientConfigFilePath=$wgClientConfigFileName
-      echo client filename is full path: $wgClientConfigFilePath
+      echo "=== client filename is full path: $wgClientConfigFilePath"
     else
       wgClientConfigFilePath=$wgClientConfigFilesDir/$wgClientConfigFileName
     fi
@@ -570,8 +576,7 @@ do
       # if wan interface down just stay here and check periodically
       WagWan $wanWait
       if [ $? -eq 1 ]; then
-        readonly wanUpAgainWait=15
-        LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, waiting $wanUpAgainWait seconds before continuing"
+        Log "WAN is back UP, waiting $wanUpAgainWait seconds before continuing"
         sleep $wanUpAgainWait
       fi
 
@@ -665,7 +670,7 @@ do
         curlOk=0
         for domain in ${curlTargets//,/ }; do
           echo ""; echo "=== curling $domain..."; echo ""
-          curl --interface $wgc $domain
+          curl -s --no-progress-meter --interface $wgc $domain
           if [ $? -eq 0 ]; then
             curlOk=1
             break
@@ -701,7 +706,7 @@ do
         break
       fi
 
-      echo sleeping for $adv secs
+      echo "=== sleeping for $adv secs"
       sleep $adv
     done
 
