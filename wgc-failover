@@ -6,13 +6,21 @@
 Log()
 {
     echo ""; echo "====================================="
-    logger -c "$(echo -e $logPrefix"$@")" # echo -e so newlines work
+    msg=$logPrefix"$@"
+    echo $msg
+    escapedLoggerMsg=$(echo -e $msg)
+    logger -c "$escapedLoggerMsg"
     echo "=================="
 }
 
 LogSlack()
 {
     Log "$@"
+    Slack "$@"
+}
+
+Slack()
+{
     if [ "$logSlackPath" != "" ]; then
       escapedSlackMsg=$(echo $logPrefix"$@" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
       $logSlackPath "$escapedSlackMsg" &> /dev/null &
@@ -188,29 +196,38 @@ OnTrap()
 
 IsWanUp()
 {
+  echo "=== IsWanUp: $1"
+
   if [ "$1" == "" ]; then
     # calling with blank interface name
     # returns DOWN but doesn't modify wanUp var
+    echo "===   blank interface"
     return 0
   fi
 
-  wanUp=0
-  wan=$(ethtool $1 | grep "Link detected:" 2>&1)
-  echo "==== ethtool $wan0: $wan"
-  if [ "$wan" != "" ]; then
-    wan=`echo $wan | awk '{print $3}'`
-    echo "==== wan link test: $wan"
-    if [ "$wan" == "yes" ]; then
-      wanUp=1
+  # check if wan is actually enabled first
+  wanUp=$(nvram get wan_enable)
+  if [ $wanUp -eq 1 ]; then
+    # wan setting is enabled, so proceed to query further
+    wanUp=0
+
+    wan=$(ethtool $1 2>&1 | grep "Link detected:")
+    echo "====   ethtool $wan0: $wan"
+    if [ "$wan" != "" ]; then
+      wan=`echo $wan | awk '{print $3}'`
+      echo "====     wan link test: $wan"
+      if [ "$wan" == "yes" ]; then
+        wanUp=1
+      fi
+    fi
+
+    if [ $wanUp -eq 1 ]; then
+      echo "===     wan $1 is UP"
+      return 1
     fi
   fi
 
-  if [ $wanUp -eq 1 ]; then
-    echo "=== wan $1 is UP"
-    return 1
-  fi
-
-  echo "=== wan $1 is DOWN"
+  echo "===   wan $1 is DOWN"
   return 0
 }
 
@@ -223,8 +240,15 @@ WagWan()
     while true; do
       IsWanUp $wan0
       if [ $wanUp -eq 0 ]; then
-        if [ $disableWan1Check -eq 0 ] && [ "$wan1" != "" ]; then
-          IsWanUp $wan1
+        # wan0 is down
+
+        # check wan1 only if wan set to failover/fallback mode
+        wansMode=$(nvram get wans_mode)
+        echo "=== wansMode: $wansMode"
+        if [ "$wansMode" == "fo" ] || [ "$wansMode" == "fo" ]; then # untested
+          if [ $disableWan1Check -eq 0 ] && [ "$wan1" != "" ]; then
+            IsWanUp $wan1
+          fi
         fi
       fi
 
@@ -235,13 +259,15 @@ WagWan()
 
       if [ $wasDown -eq 0 ]; then
         wasDown=1
+        wanDownSince=$(date)
         Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
       fi
       sleep $wait
     done
 
     if [ $wasDown -eq 1 ]; then
-      LogSlack "CONNECTIVITY RECOVERY: WAN is back UP"
+      LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, observed down at $wanDownSince"
+      wasDown=0
     fi
 
     # returns 1 if was found to be down previously, in loop above
@@ -265,7 +291,7 @@ readonly _wanWait=30
 readonly _disableWan1Check=0
 
 readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
-readonly _nslookupTargets="google.com,amazon.com,cloudflare.com,facebook.com"
+readonly _nslookupTargets="google.com,amazon.com,cloudflare.com"
 readonly _curlTargets=$_nslookupTargets
 
 SetDefaults()
@@ -352,8 +378,7 @@ failoverConfigPath=""
 clientConfigDir=""
 logSlackPath=""
 
-LogSlack command line: \'$0 $@\'
-sleep 1
+Log "command line: $0 $@"
 
 # parse args
 #   - first is client number
@@ -374,6 +399,9 @@ logPrefix="wgc-failover[$clientNum]: "
 
 #   - optional switch/value pair args
 ParseArgs 0 $@
+
+# send command line to slack, if path now set
+Slack "command line: $0 $@"
 
 # check overridden failover config path
 if [ "$failoverConfigPath" != "" ]; then
@@ -583,7 +611,7 @@ do
       fail=0
       adv=$hsWait
 
-      wgShow=$(wg show $wgc latest-handshakes 2>&1)
+      wgShow=$(wg show $wgc latest-handshakes)
       echo "=== wg show $wgc latest-handshakes: $wgShow"
 
       ifconfig=$(ifconfig $wgc 2>&1)
@@ -620,7 +648,7 @@ do
         pingOk=0
         for ip in ${pingTargets//,/ }; do
           echo ""; echo "=== pinging $ip..."; echo ""
-          ping -I $wgc -c 1 -w 1 $ip
+          ping -I $wgc -c 1 -w 1 $ip 2>&1
           if [ $? -eq 0 ]; then
             pingOk=1
             break
@@ -645,7 +673,7 @@ do
           dnsOk=0
           for domain in ${nslookupTargets//,/ }; do
             echo ""; echo "=== looking up $domain via $dnsServer..."; echo ""
-            nslookup $domain $dnsServer
+            nslookup $domain $dnsServer 2>&1
             if [ $? -eq 0 ]; then
               dnsOk=1
               break
@@ -670,7 +698,7 @@ do
         curlOk=0
         for domain in ${curlTargets//,/ }; do
           echo ""; echo "=== curling $domain..."; echo ""
-          curl -s --no-progress-meter --interface $wgc $domain
+          curl -s --no-progress-meter --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
           if [ $? -eq 0 ]; then
             curlOk=1
             break
