@@ -60,9 +60,9 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
     -pt <"IP,...">   Comma-separated list of IP addresses for ping test in quotes
                         (default: "8.8.8.8,1.1.1.1,9.9.9.9")
     -dt <"URL,...">  Comma-separated list of URLS for DNS test in quotes
-                        (default: "google.com,amazon.com,cloudflare.com,facebook.com")
+                        (default: "google.com,amazon.com,cloudflare.com")
     -ct <"URL,...">  Comma-separated list of URLs for curl test in quotes
-                        (default: "google.com,amazon.com,cloudflare.com,facebook.com")
+                        (default: "google.com,amazon.com,cloudflare.com")
 
     --reset        Resets any of the previous args shown above to
                     their default values (also shown above)
