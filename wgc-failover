@@ -290,7 +290,6 @@ WagWan()
 
     if [ $wasDown -eq 1 ]; then
       LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, observed down at $wanDownSince"
-      wasDown=0
     fi
 
     # returns 1 if was found to be down previously, in loop above
