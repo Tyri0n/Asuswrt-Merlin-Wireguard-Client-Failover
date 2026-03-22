@@ -5,26 +5,26 @@
 
 Log()
 {
-    echo ""; echo "====================================="
-    msg=$logPrefix"$@"
-    echo $msg
-    escapedLoggerMsg=$(echo -e $msg)
-    logger -c "$escapedLoggerMsg"
-    echo "=================="
+  echo ""; echo "====================================="
+  msg=$logPrefix"$@"
+  echo "=Log= $msg"
+  escapedLoggerMsg=$(echo -e $msg)
+  logger -c "$escapedLoggerMsg"
+  echo "^^^==================^^^"
 }
 
 LogSlack()
 {
-    Log "$@"
-    Slack "$@"
+  Log "$@"
+  Slack "$@"
 }
 
 Slack()
 {
-    if [ "$logSlackPath" != "" ]; then
-      escapedSlackMsg=$(echo $logPrefix"$@" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
-      $logSlackPath "$escapedSlackMsg" &> /dev/null &
-    fi
+  if [ "$logSlackPath" != "" ]; then
+    escapedSlackMsg=$(echo $logPrefix"$@" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
+    $logSlackPath "$escapedSlackMsg" &> /dev/null &
+  fi
 }
 
 ParseArgs()
@@ -156,12 +156,7 @@ StartTimer()
 
 StopTimer()
 {
-  # this caused script to silently exit, but only when run on boot
-  # added traps to try and catch, but they didn't
-  #Timer=$( date +%s --date="$timerStart seconds ago" )
-
-  timerEnd=$(date +%s)
-  Timer=$(( $timerEnd - $timerStart ))
+  return $(( $(date +%s) - $timerStart ))
 }
 
 ParamsString()
@@ -234,20 +229,47 @@ IsWanUp()
 WagWan()
 {
     wait=$1
+    echo "=== WagWan: $1"
     
     # check wan until it's up
+    wanUp=0
     wasDown=0
     while true; do
-      IsWanUp $wan0
-      if [ $wanUp -eq 0 ]; then
-        # wan0 is down
 
-        # check wan1 only if wan set to failover/fallback mode
-        wansMode=$(nvram get wans_mode)
-        echo "=== wansMode: $wansMode"
-        if [ "$wansMode" == "fo" ] || [ "$wansMode" == "fo" ]; then # untested
-          if [ $disableWan1Check -eq 0 ] && [ "$wan1" != "" ]; then
-            IsWanUp $wan1
+      wan00=$(nvram get wan0_ifname)
+      if [ "$wan0" != "" ]; then
+        IsWanUp $wan0
+      fi
+      if [ $wanUp -eq 0 ]; then
+        # check wan0 ifname hasn't changed - not sure if this is even possible
+        if [ "$wan0" != "$wan00" ] && [ "$wan00" != "" ]; then
+          LogSlack "CONNECTIVITY CHANGE: wan0 interface name changed from \'$wan0\' to \'$wan00\'"
+          wan0=$wan00
+          # check new wan0
+          IsWanUp $wan0
+        fi
+
+        if [ $wanUp -eq 0 ]; then
+          # wan0 is down
+          if [ $disableWan1Check -eq 0 ]; then
+            # check wan1 only if wan set to failover/fallback mode ### UNTESTED ###
+            wansMode=$(nvram get wans_mode)
+            echo "=== wansMode: $wansMode"
+            if [ "$wansMode" == "fb" ] || [ "$wansMode" == "fo" ]; then 
+              wan01=$(nvram get wan1_ifname)
+              if [ "$wan1" != "" ]; then
+                IsWanUp $wan1
+              fi
+              if [ $wanUp -eq 0 ]; then
+                # check wan1 ifname hasn't changed - not sure if this is even possible
+                if [ "$wan1" != "$wan01" ] && [ "$wan01" != "" ]; then
+                  LogSlack "CONNECTIVITY CHANGE: wan1 interface name changed from \'$wan1\' to \'$wan01\'"
+                  wan1=$wan01
+                  # check new wan1
+                  IsWanUp $wan1
+                fi
+              fi
+            fi
           fi
         fi
       fi
@@ -262,6 +284,7 @@ WagWan()
         wanDownSince=$(date)
         Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
       fi
+
       sleep $wait
     done
 
@@ -601,14 +624,15 @@ do
 
     while true
     do
-      # if wan interface down just stay here and check periodically
+      # wait on wan being up
       WagWan $wanWait
       if [ $? -eq 1 ]; then
+        # was down, so wait for a bit before continuing
         Log "WAN is back UP, waiting $wanUpAgainWait seconds before continuing"
         sleep $wanUpAgainWait
       fi
 
-      fail=0
+      testsFailed=""
       adv=$hsWait
 
       wgShow=$(wg show $wgc latest-handshakes)
@@ -637,7 +661,7 @@ do
       # fail if lhs is nonsense
       if [ -z $lhs ] || [ -z $dateLhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
         LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
-        fail=1
+        testsFailed="+Handshake"
       fi
 
       if [ $testPing -ne 0 ]; then
@@ -656,11 +680,10 @@ do
         done
 
         StopTimer
-        adv=$(( $adv - $Timer ))
+        adv=$(( $adv - $? ))
 
         if [ $pingOk -eq 0 ]; then
-          LogSlack "pings failed"
-          fail=1
+          testsFailed="$testsFailed+Ping"
         fi
       fi
 
@@ -681,11 +704,10 @@ do
           done
 
           StopTimer
-          adv=$(( $adv - $Timer ))
+          adv=$(( $adv - $? ))
 
           if [ $dnsOk -eq 0 ]; then
-            LogSlack "dns lookups failed"
-            fail=1
+            testsFailed="$testsFailed+DNS"
           fi
         fi
       fi
@@ -706,26 +728,25 @@ do
         done
 
         StopTimer
-        adv=$(( $adv - $Timer ))
+        adv=$(( $adv - $? ))
 
         if [ $curlOk -eq 0 ]; then
-          LogSlack "curls failed"
-          fail=1
+          testsFailed="$testsFailed+Curl"
         fi
       fi
 
       # failures can modify next handshake wait
-      if [ $fail = 1 ]; then
+      if [ $testsFailed != "" ]; then
         if [ $adv -lt 15 ]; then
           adv=15
         fi
-        LogSlack "CONNECTIVITY FAIL: reducing next handshake wait to $adv seconds"
+        LogSlack "CONNECTIVITY FAIL: [$testsFailed+], reducing next handshake wait to $adv seconds"
       fi
 
       nhsm=$(( $nhs % $logEveryNthHandshake ))      
       nhs=$(( $nhs + 1 ))
       if [ $nhsm -eq 0 ]; then
-        Log "$wgClientDescription: handshake #$nhs was $lhs secs ago, client config active since: $upSince"
+        Log "$wgClientDescription: handshake #$nhs was $lhs secs ago"
       fi
 
       # give up on this client config if out of action for too long
