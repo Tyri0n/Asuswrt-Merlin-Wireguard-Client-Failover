@@ -193,33 +193,53 @@ IsWanUp()
 {
   echo "=== IsWanUp: $1"
 
-  if [ "$1" == "" ]; then
-    # calling with blank interface name
-    # returns DOWN but doesn't modify wanUp var
-    echo "===   blank interface"
+  # check if wan is actually enabled first
+  enabled=$(nvram get wan_enable)
+  if [ $enabled -eq 0 ]; then
+    echo "===  wan IS DOWN: disabled on router"
+    wanUp=0
     return 0
   fi
 
-  # check if wan is actually enabled first
-  wanUp=$(nvram get wan_enable)
+  wan=""
+  # no arrays in sh, so longhand it is...
+  if [ $1 -eq 0 ]; then
+    wan=$wan0
+    if [ "$wan" == "" ]; then
+      wan=$(nvram get wan0_ifname)
+      echo "===   wan0 was blank, fetched again: $wan"
+      wan0=$wan
+    fi
+  elif [ $1 -eq 1 ]; then
+    wan=$wan1
+    if [ "$wan" == "" ]; then
+      wan=$(nvram get wan1_ifname)
+      echo "===   wan1 was blank, fetched again: $wan"
+      wan1=$wan
+    fi
+  else
+    echo "===   invalid wan index"
+    return 0
+  fi
+
+  if [ "$wan" == "" ]; then
+    echo "===   blank interface name"
+    return 0
+  fi
+
+  result=$(ethtool "$wan" 2>&1 | grep "Link detected:")
+  echo "====   ethtool $wan: $result"
+  if [ "$result" != "" ]; then
+    result=`echo $result | awk '{print $3}'`
+    echo "====     wan link test: $result"
+    if [ "$result" == "yes" ]; then
+      wanUp=1
+    fi
+  fi
+
   if [ $wanUp -eq 1 ]; then
-    # wan setting is enabled, so proceed to query further
-    wanUp=0
-
-    wan=$(ethtool $1 2>&1 | grep "Link detected:")
-    echo "====   ethtool $wan0: $wan"
-    if [ "$wan" != "" ]; then
-      wan=`echo $wan | awk '{print $3}'`
-      echo "====     wan link test: $wan"
-      if [ "$wan" == "yes" ]; then
-        wanUp=1
-      fi
-    fi
-
-    if [ $wanUp -eq 1 ]; then
-      echo "===     wan $1 is UP"
-      return 1
-    fi
+    echo "===     wan $1 is UP"
+    return 1
   fi
 
   echo "===   wan $1 is DOWN"
@@ -235,41 +255,14 @@ WagWan()
     wanUp=0
     wasDown=0
     while true; do
-
-      wan00=$(nvram get wan0_ifname)
-      if [ "$wan0" != "" ]; then
-        IsWanUp $wan0
-      fi
-      if [ $wanUp -eq 0 ]; then
-        # check wan0 ifname hasn't changed - not sure if this is even possible
-        if [ "$wan0" != "$wan00" ] && [ "$wan00" != "" ]; then
-          LogSlack "CONNECTIVITY CHANGE: wan0 interface name changed from \'$wan0\' to \'$wan00\'"
-          wan0=$wan00
-          # check new wan0
-          IsWanUp $wan0
-        fi
-
-        if [ $wanUp -eq 0 ]; then
-          # wan0 is down
-          if [ $disableWan1Check -eq 0 ]; then
-            # check wan1 only if wan set to failover/fallback mode ### UNTESTED ###
-            wansMode=$(nvram get wans_mode)
-            echo "=== wansMode: $wansMode"
-            if [ "$wansMode" == "fb" ] || [ "$wansMode" == "fo" ]; then 
-              wan01=$(nvram get wan1_ifname)
-              if [ "$wan1" != "" ]; then
-                IsWanUp $wan1
-              fi
-              if [ $wanUp -eq 0 ]; then
-                # check wan1 ifname hasn't changed - not sure if this is even possible
-                if [ "$wan1" != "$wan01" ] && [ "$wan01" != "" ]; then
-                  LogSlack "CONNECTIVITY CHANGE: wan1 interface name changed from \'$wan1\' to \'$wan01\'"
-                  wan1=$wan01
-                  # check new wan1
-                  IsWanUp $wan1
-                fi
-              fi
-            fi
+      IsWanUp 0
+      if [ $? -eq 0 ]; then
+        if [ $disableWan1Check -eq 0 ]; then
+          # check wan1 only if wan set to failover/fallback mode ### UNTESTED ###
+          wansMode=$(nvram get wans_mode)
+          echo "===  wansMode: $wansMode"
+          if [ "$wansMode" == "fb" ] || [ "$wansMode" == "fo" ]; then 
+            IsWanUp 1
           fi
         fi
       fi
@@ -735,7 +728,7 @@ do
       fi
 
       # failures can modify next handshake wait
-      if [ $testsFailed != "" ]; then
+      if [ "$testsFailed" != "" ]; then
         if [ $adv -lt 15 ]; then
           adv=15
         fi
