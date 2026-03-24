@@ -189,37 +189,31 @@ OnTrap()
   Exit 4 "trapped: $sig"
 }
 
-IsWanUp()
+GetWanIfName()
 {
-  echo "=== IsWanUp: $1"
-
-  # check if wan is actually enabled first
-  enabled=$(nvram get wan_enable)
-  if [ $enabled -eq 0 ]; then
-    echo "===  wan IS DOWN: disabled on router"
-    wanUp=0
-    return 0
-  fi
+  echo "=== GetWanIfName: $1"
 
   wan=""
-  # no arrays in sh, so longhand it is...
-  if [ $1 -eq 0 ]; then
-    wan=$wan0
-    if [ "$wan" == "" ]; then
-      wan=$(nvram get wan0_ifname)
-      echo "===   wan0 was blank, fetched again: $wan"
-      wan0=$wan
+
+  if [ $# -gt 0 ] && [ -z "${1//[0-9]}" ]; then
+    # no arrays in sh, so longhand it is...
+    if [ $1 -eq 0 ]; then
+      wan=$wan0
+      if [ "$wan" == "" ]; then
+        wan=$(nvram get wan0_ifname)
+        echo "===   wan0 was blank, fetched again: $wan"
+        wan0=$wan
+      fi
+    elif [ $1 -eq 1 ]; then
+      wan=$wan1
+      if [ "$wan" == "" ]; then
+        wan=$(nvram get wan1_ifname)
+        echo "===   wan1 was blank, fetched again: $wan"
+        wan1=$wan
+      fi
+    else
+      echo "===   invalid wan index"
     fi
-  elif [ $1 -eq 1 ]; then
-    wan=$wan1
-    if [ "$wan" == "" ]; then
-      wan=$(nvram get wan1_ifname)
-      echo "===   wan1 was blank, fetched again: $wan"
-      wan1=$wan
-    fi
-  else
-    echo "===   invalid wan index"
-    return 0
   fi
 
   if [ "$wan" == "" ]; then
@@ -227,19 +221,31 @@ IsWanUp()
     return 0
   fi
 
-  result=$(ethtool "$wan" 2>&1 | grep "Link detected:")
-  echo "====   ethtool $wan: $result"
-  if [ "$result" != "" ]; then
-    result=`echo $result | awk '{print $3}'`
-    echo "====     wan link test: $result"
-    if [ "$result" == "yes" ]; then
-      wanUp=1
-    fi
-  fi
+  return 1
+}
 
-  if [ $wanUp -eq 1 ]; then
-    echo "===     wan $1 is UP"
-    return 1
+IsWanUp()
+{
+  echo "=== IsWanUp: $1"
+
+  # check if wan is actually enabled first
+  enabled=$(nvram get wan_enable)
+  if [ $enabled -eq 0 ]; then
+    echo "===  wan is disabled on router"
+  else
+    GetWanIfName $1
+    if [ "$wan" != "" ]; then
+      result=$(ethtool "$wan" 2>&1 | grep "Link detected:")
+      echo "====   ethtool $wan: $result"
+      if [ "$result" != "" ]; then
+        result=`echo $result | awk '{print $3}'`
+        echo "====     wan link test: $result"
+        if [ "$result" == "yes" ]; then
+          echo "===     wan $1 is UP"
+          return 1
+        fi
+      fi
+    fi
   fi
 
   echo "===   wan $1 is DOWN"
@@ -248,45 +254,46 @@ IsWanUp()
 
 WagWan()
 {
-    wait=$1
-    echo "=== WagWan: $1"
-    
-    # check wan until it's up
-    wanUp=0
-    wasDown=0
-    while true; do
-      IsWanUp 0
-      if [ $? -eq 0 ]; then
-        if [ $disableWan1Check -eq 0 ]; then
-          # check wan1 only if wan set to failover/fallback mode ### UNTESTED ###
-          wansMode=$(nvram get wans_mode)
-          echo "===  wansMode: $wansMode"
-          if [ "$wansMode" == "fb" ] || [ "$wansMode" == "fo" ]; then 
-            IsWanUp 1
-          fi
+  wait=$1
+  echo "=== WagWan: $1"
+  
+  # check wan until it's up
+  wanUp=0
+  wasDown=0
+  
+  while true; do
+    IsWanUp 0; wanUp=$?
+    if [ $wanUp -eq 0 ]; then
+      if [ $disableWan1Check -eq 0 ]; then
+        # check wan1 only if wan set to failover/fallback mode ### UNTESTED ###
+        wansMode=$(nvram get wans_mode)
+        echo "===  wansMode: $wansMode"
+        if [ "$wansMode" == "fb" ] || [ "$wansMode" == "fo" ]; then 
+          IsWanUp 1; wanUp=$?
         fi
       fi
-
-      if [ $wanUp -eq 1 ]; then
-        # and we're done
-        break
-      fi
-
-      if [ $wasDown -eq 0 ]; then
-        wasDown=1
-        wanDownSince=$(date)
-        Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
-      fi
-
-      sleep $wait
-    done
-
-    if [ $wasDown -eq 1 ]; then
-      LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, observed down at $wanDownSince"
     fi
 
-    # returns 1 if was found to be down previously, in loop above
-    return $wasDown
+    if [ $wanUp -eq 1 ]; then
+      # and we're done
+      break
+    fi
+
+    if [ $wasDown -eq 0 ]; then
+      wasDown=1
+      wanDownSince=$(date)
+      Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
+    fi
+
+    sleep $wait
+  done
+
+  if [ $wasDown -eq 1 ]; then
+    LogSlack "CONNECTIVITY RECOVERY: WAN is back UP, observed down at $wanDownSince"
+  fi
+
+  # returns 1 if was found to be down previously, in loop above
+  return $wasDown
 }
 
 
