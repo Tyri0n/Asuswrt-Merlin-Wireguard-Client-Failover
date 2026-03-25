@@ -45,42 +45,53 @@ To start after a reboot:
 
 Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
-    -h, --help     Show these instructions
+   -h, --help     Show these instructions
 
-    -k <0/1>       Enable killswitch                 (default: 1)
-    -w <Seconds>   Wait between handshake checks     (default: 180)
-    -t <Seconds>   Handshake timeout                 (default: 300)
-    -q <0/1>       Quit on interface not found       (default: 0)
-    -p <0/1>       Test ping                         (default: 1)
-    -d <0/1>       Test DNS                          (default: 1)
-    -c <0/1>       Test curl                         (default: 1)
-    -n <Amount>    Log every Nth handshake           (default: 10)
-    -a <Seconds>   Wait between WAN checks when down (default: 30)
+ Client interface:
 
-    -pt <"IP,...">   Comma-separated list of IP addresses for ping test in quotes
+   -k <0/1>       Enable killswitch                 (default: 1)
+
+ Connectivity checks:
+
+   -w <Seconds>   Wait between handshake checks     (default: 180)
+   -t <Seconds>   Handshake timeout                 (default: 300)
+   -q <0/1>       Quit on interface not found       (default: 0)
+   -p <0/1>       Test ping                         (default: 1)
+   -d <0/1>       Test DNS                          (default: 1)
+   -c <0/1>       Test curl                         (default: 1)
+   -n <Amount>    Log every Nth handshake           (default: 10)
+   -a <Seconds>   Wait between WAN checks when down (default: 30)
+
+   -pt <"IP,...">   Comma-separated list of IP addresses for ping test in quotes
                         (default: "8.8.8.8,1.1.1.1,9.9.9.9")
-    -dt <"URL,...">  Comma-separated list of URLS for DNS test in quotes
+   -dt <"URL,...">  Comma-separated list of URLS for DNS test in quotes
                         (default: "google.com,amazon.com,cloudflare.com")
-    -ct <"URL,...">  Comma-separated list of URLs for curl test in quotes
+   -ct <"URL,...">  Comma-separated list of URLs for curl test in quotes
                         (default: "google.com,amazon.com,cloudflare.com")
 
-    --reset        Resets any of the previous args shown above to
-                    their default values (also shown above)
+   --reset        Resets any of the previous args shown above to
+                  their default values (also shown above)
 
-    --logslackpath   Path to shell script to pass priority logs to
+   --logslackpath   Path to shell script to pass priority logs to
 
-    [Options...] can also be specified per client config in failover config files (on previous line)
+ [Options...] can also be specified per client config in failover config files (on previous line)
 
-    Command line only:
+   Command line only:
 
-    --failoverconfigpath   Override the default path to the failover config
+     --failoverconfigpath   Override the default path to the failover config
                             (from /jffs/configs/wgc-failover-[Client Number].conf)
 
-    --clientconfigdir      Override the default configs directory path
+     --clientconfigdir      Override the default configs directory path
                             (from /jffs/configs/wgc-failover-client-[Client Number]-configs)
 
-    --disablewan1check     Don't check secondary WAN interface
+     --disablewan1check     Don't check secondary WAN interface
 
+     --attachtorunningclientconfig  If the running client config description matches an
+                                    entry in the failover config, then don't reload the
+                                    client config but just resume monitoring it.
+
+                                    CAUTION: Client interface args are only applied to the
+                                    client when loaded/started and will therefore not be set again.
 
 
 
