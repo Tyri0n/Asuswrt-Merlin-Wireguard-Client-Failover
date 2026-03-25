@@ -42,13 +42,20 @@ ParseArgs()
 
       if [[ ${arg:0:1} == '-' ]]; then
           if [ $arg == "--reset" ]; then
-              SetDefaults
+            SetDefaults
           elif [ $arg == "--disablewan1check" ]; then
             if [ $fromClientConfig -eq 0 ]; then
               echo set disableWan1Check: 1
               disableWan1Check=1
             else
-              ArgCmdLineOnly $var $arg
+              ArgCmdLineOnly $arg ""
+            fi
+          elif [ $arg == "--attachtorunningclientconfig" ]; then
+            if [ $fromClientConfig -eq 0 ]; then
+              echo set attachToRunningClientConfig: 1
+              attachToRunningClientConfig=1
+            else
+              ArgCmdLineOnly $arg ""
             fi
           else
             echo set var: \"$arg\"
@@ -90,7 +97,6 @@ ParseArgs()
                   wanWait=$arg
               else
                 LogSlack "unrecognised var \'$var\' - discarding that and arg \'$arg\'"
-                unset var
               fi
             else
               if [ $var == "--failoverconfigpath" ]; then
@@ -296,6 +302,30 @@ WagWan()
   return $wasDown
 }
 
+FindRunningClientConfig()
+{
+  echo "=== FindRunningClientConfig"
+  currDescr=$(nvram get "$wgc"_desc)
+  echo "===  currDescr: $currDescr"
+
+  runningConfigItem=0
+  configItem=0
+  while read line; do
+    if [ "$line" != "" ]; then
+      fc=${line:0:1}
+      if [ $fc  != '#' ] && [ $fc  != '-' ]; then
+        configItem=$(( $configItem + 1 ))
+        descr="$(echo $line | cut -d " " -f2)"
+        if [ "$descr" == "$currDescr" ]; then
+          runningConfigItem=$configItem
+          echo "===    runningConfigItem: $runningConfigItem"
+          break
+        fi
+      fi
+    fi
+  done < "$wgFailoverConfigFilePath"
+  return $runningConfigItem
+}
 
 readonly maxWgc=5
 readonly wanUpAgainWait=15
@@ -311,6 +341,7 @@ readonly _testCurl=1
 readonly _logEveryNthHandshake=10
 readonly _wanWait=30
 readonly _disableWan1Check=0
+readonly _attachToRunningClientConfig=0
 
 readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
 readonly _nslookupTargets="google.com,amazon.com,cloudflare.com"
@@ -329,6 +360,7 @@ SetDefaults()
   logEveryNthHandshake=$_logEveryNthHandshake
   wanWait=$_wanWait
   disableWan1Check=$_disableWan1Check
+  attachToRunningClientConfig=$_attachToRunningClientConfig
 
   pingTargets=$_pingTargets
   nslookupTargets=$_nslookupTargets
@@ -340,41 +372,53 @@ ShowUsage()
   echo ""
   echo "Usage: wgc-failover [Client Number <1 to $maxWgc>] [Options...]"
   echo ""
-  echo " -h, --help     Show these instructions"
+  echo "   -h, --help     Show these instructions"
   echo ""
-  echo " -k <0/1>       Enable killswitch                 (default: $_killswitch)"
-  echo " -w <Seconds>   Wait between handshake checks     (default: $_hsWait)"
-  echo " -t <Seconds>   Handshake timeout                 (default: $_hsTimeout)"
-  echo " -q <0/1>       Quit on interface not found       (default: $_quitOnNoInterface)"
-  echo " -p <0/1>       Test ping                         (default: $_testPing)"
-  echo " -d <0/1>       Test DNS                          (default: $_testDns)"
-  echo " -c <0/1>       Test curl                         (default: $_testCurl)"
-  echo " -n <Amount>    Log every Nth handshake           (default: $_logEveryNthHandshake)"
-  echo " -a <Seconds>   Wait between WAN checks when down (default: $_wanWait)"
+  echo " Client interface:"
   echo ""
-  echo " -pt <\"IP,...\">   Comma-separated list of IP addresses for ping test in quotes"
-  echo "                      (default: \"$_pingTargets\")"
-  echo " -dt <\"URL,...\">  Comma-separated list of URLS for DNS test in quotes"
-  echo "                      (default: \"$_nslookupTargets\")"
-  echo " -ct <\"URL,...\">  Comma-separated list of URLs for curl test in quotes"
-  echo "                      (default: \"$_curlTargets\")"
+  echo "   -k <0/1>       Enable killswitch                 (default: $_killswitch)"
   echo ""
-  echo " --reset        Resets any of the previous args shown above to"
-  echo "                their default values (also shown above)"
+  echo " Connectivity checks:"
   echo ""
-  echo " --logslackpath   Path to shell script to pass priority logs to"
+  echo "   -w <Seconds>   Wait between handshake checks     (default: $_hsWait)"
+  echo "   -t <Seconds>   Handshake timeout                 (default: $_hsTimeout)"
+  echo "   -q <0/1>       Quit on interface not found       (default: $_quitOnNoInterface)"
+  echo "   -p <0/1>       Test ping                         (default: $_testPing)"
+  echo "   -d <0/1>       Test DNS                          (default: $_testDns)"
+  echo "   -c <0/1>       Test curl                         (default: $_testCurl)"
+  echo "   -n <Amount>    Log every Nth handshake           (default: $_logEveryNthHandshake)"
+  echo "   -a <Seconds>   Wait between WAN checks when down (default: $_wanWait)"
+  echo ""
+  echo "   -pt <\"IP,...\">   Comma-separated list of IP addresses for ping test in quotes"
+  echo "                        (default: \"$_pingTargets\")"
+  echo "   -dt <\"URL,...\">  Comma-separated list of URLS for DNS test in quotes"
+  echo "                        (default: \"$_nslookupTargets\")"
+  echo "   -ct <\"URL,...\">  Comma-separated list of URLs for curl test in quotes"
+  echo "                        (default: \"$_curlTargets\")"
+  echo ""
+  echo "   --reset        Resets any of the previous args shown above to"
+  echo "                  their default values (also shown above)"
+  echo ""
+  echo "   --logslackpath   Path to shell script to pass priority logs to"
   echo ""
   echo " [Options...] can also be specified per client config in failover config files (on previous line)"
   echo ""
-  echo "" Command line only:
+  echo "   Command line only:"
   echo ""
-  echo " --failoverconfigpath   Override the default path to the failover config"
-  echo "                        (from /jffs/configs/wgc-failover-[Client Number].conf)"
+  echo "     --failoverconfigpath   Override the default path to the failover config"
+  echo "                            (from /jffs/configs/wgc-failover-[Client Number].conf)"
   echo ""
-  echo " --clientconfigdir      Override the default configs directory path"
-  echo "                        (from /jffs/configs/wgc-failover-client-[Client Number]-configs)"
+  echo "     --clientconfigdir      Override the default configs directory path"
+  echo "                            (from /jffs/configs/wgc-failover-client-[Client Number]-configs)"
   echo ""
-  echo " --disablewan1check     Don't check secondary WAN interface"
+  echo "     --disablewan1check     Don't check secondary WAN interface"
+  echo ""  
+  echo "     --attachtorunningclientconfig  If the running client config description matches an"
+  echo "                                    entry in the failover config, then don't reload the"
+  echo "                                    client config but just resume monitoring it."
+  echo ""
+  echo "                                    CAUTION: Client interface args are only applied to the"
+  echo "                                    client when loaded/started and will therefore not be set again."
   echo ""
   if [ $# -eq 0 ]; then
     exit 0
@@ -491,12 +535,21 @@ fi
 
 
 #### Run script forever ####
+continueWithRunningClientConfig=0
 while true
 do
   LogSlack "Loading failover config: $wgFailoverConfigFilePath"
   sleep 1
 
+  if [ $attachToRunningClientConfig -ne 0 ]; then
+    FindRunningClientConfig
+    if [ $1 -ne 0 ]; then
+      echo "=== running client config: $1"
+    fi
+  fi
+
   #### Read failover config file into variables ####
+  configItem=0
   while read line
   do
     echo "=== line: $line"
@@ -517,11 +570,6 @@ do
       continue
     fi
 
-    if [ -n "$upSince" ]; then
-      LogSlack "previous client config was active since: $upSince"
-      unset upSince
-    fi
-
     wgClientConfigFileName="$(echo $line | cut -d " " -f1)"
     wgClientDescription="$(echo $line | cut -d " " -f2)"
 
@@ -534,87 +582,114 @@ do
       wgClientConfigFilePath=$wgClientConfigFilesDir/$wgClientConfigFileName
     fi
 
-    if ! [ -f $wgClientConfigFilePath ]; then
-      ### Exit 8 "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid"
+    configItem=$(( $configItem + 1 ))
 
-      # try next config instead
-      LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next config"
-      continue
+    # check if we should attach or reload
+    if [ $runningConfigItem -ne 0 ]; then
+      if [ $configItem -ne $runningConfigItem ]; then
+        # proceed to next line
+        continue
+      fi
+      # attach it is, then...
+      continueWithRunningClientConfig=1
+      LogSlack "Continuing with the current running client config: ($runningConfigItem) $wgClientDescription"
     fi
 
-    LogSlack "Loading client config $wgClientConfigFilePath as $wgClientDescription\n\t"$(ParamsString)
+    if [ $continueWithRunningClientConfig -ne 0 ]; then
+      Log "Skipping loading client config and restarting - just continuing to monitor one currently the active"
+    else
+      if [ -n "$upSince" ]; then
+        LogSlack "Previous client config was active since: $upSince"
+        unset upSince
+      fi
 
-    # stop client before changing client settings in nvram
-    service "stop_wgc $clientNum"
-    sleep 3
+      if ! [ -f $wgClientConfigFilePath ]; then
+        ### Exit 8 "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid"
 
-    #### Read Wireguard client config file into variables and generate nvram set commands ####
-    dnsServer=""
-    while read line
-    do
-      # skip blank line
-      if [ "$line" == "" ]; then
+        # try next config instead
+        LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next config"
         continue
       fi
 
-      fc=${line:0:1}
-      # if line starts with # it's a comment
-      if [[ $fc  == '#' ]]; then
-        continue
-      fi
+      LogSlack "Loading client config $wgClientConfigFilePath as $wgClientDescription\n\t"$(ParamsString)
 
-      #### Remove spaces around equal sign to make formatting easy ####
-      if test "$line" != "${line%" = "*}"
-      then
-        lineFormatted="${line//" "/""}"
-        #### Generate nvram set commands from Wireguard client config file ####
-        if test "$lineFormatted" != "${lineFormatted%"Address"*}"
-        then
-          nvram set "$wgc"_addr="${lineFormatted#*=}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"Endpoint"*}"
-        then
-          endpointFull="${lineFormatted#*=}"
-          nvram set "$wgc"_ep_addr="${endpointFull%:*}"
-          nvram set "$wgc"_ep_port="${endpointFull#*:}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"PublicKey"*}"
-        then
-          nvram set "$wgc"_ppub="${lineFormatted#*=}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"PrivateKey"*}"
-        then
-          nvram set "$wgc"_priv="${lineFormatted#*=}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"PresharedKey"*}"
-        then
-          nvram set "$wgc"_psk="${lineFormatted#*=}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"AllowedIPs"*}"
-        then
-          nvram set "$wgc"_aips="${lineFormatted#*=}"
-        fi
-        if test "$lineFormatted" != "${lineFormatted%"DNS"*}"
-        then
-          dnsServer="${lineFormatted#*=}"
-          echo "==== dnsServer: $dnsServer"
-          nvram set "$wgc"_dns=$dnsServer
-        fi
-      fi
-    done < "$wgClientConfigFilePath"
+      # stop client before changing client settings in nvram
+      service "stop_wgc $clientNum"
+      sleep 3
 
-    #### Generate default nvram set commands ####
-    nvram set "$wgc"_desc="$wgClientDescription"
-    nvram set "$wgc"_alive=25
-    nvram set "$wgc"_enable=1
-    nvram set "$wgc"_fw=1
-    nvram set "$wgc"_nat=1
-    nvram set "$wgc"_enforce=$killswitch
-    
-    # start client
-    service "start_wgc $clientNum"
-    upSince=$(date)
-    sleep 3
+      #### Read Wireguard client config file into variables and generate nvram set commands ####
+      dnsServer=""
+      while read line
+      do
+        # skip blank line
+        if [ "$line" == "" ]; then
+          continue
+        fi
+
+        fc=${line:0:1}
+        # if line starts with # it's a comment
+        if [[ $fc  == '#' ]]; then
+          continue
+        fi
+
+        #### Remove spaces around equal sign to make formatting easy ####
+        if test "$line" != "${line%" = "*}"
+        then
+          lineFormatted="${line//" "/""}"
+          #### Generate nvram set commands from Wireguard client config file ####
+          if test "$lineFormatted" != "${lineFormatted%"Address"*}"
+          then
+            nvram set "$wgc"_addr="${lineFormatted#*=}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"Endpoint"*}"
+          then
+            endpointFull="${lineFormatted#*=}"
+            nvram set "$wgc"_ep_addr="${endpointFull%:*}"
+            nvram set "$wgc"_ep_port="${endpointFull#*:}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"PublicKey"*}"
+          then
+            nvram set "$wgc"_ppub="${lineFormatted#*=}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"PrivateKey"*}"
+          then
+            nvram set "$wgc"_priv="${lineFormatted#*=}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"PresharedKey"*}"
+          then
+            nvram set "$wgc"_psk="${lineFormatted#*=}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"AllowedIPs"*}"
+          then
+            nvram set "$wgc"_aips="${lineFormatted#*=}"
+          fi
+          if test "$lineFormatted" != "${lineFormatted%"DNS"*}"
+          then
+            dnsServer="${lineFormatted#*=}"
+            echo "==== dnsServer: $dnsServer"
+            nvram set "$wgc"_dns=$dnsServer
+          fi
+        fi
+      done < "$wgClientConfigFilePath"
+
+      #### Generate default nvram set commands ####
+      nvram set "$wgc"_desc="$wgClientDescription"
+      nvram set "$wgc"_alive=25
+      nvram set "$wgc"_enable=1
+      nvram set "$wgc"_fw=1
+      nvram set "$wgc"_nat=1
+      nvram set "$wgc"_enforce=$killswitch
+      
+      # start client
+      service "start_wgc $clientNum"
+      upSince=$(date)
+      sleep 3
+    fi
+
+    # finished with this after initial client config started/attached
+    attachtorunningclientconfig=0
+    runningConfigItem=0
+    continueWithRunningClientConfig=0
 
     #### Keep monitoring latest handshake, exit loop if it past threshold of x secs ####
     lhs=0
