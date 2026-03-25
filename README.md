@@ -42,7 +42,7 @@ To start after a reboot:
 
     Make sure to run as a background process by ending the command line with '&'
 
-
+```
 Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
    -h, --help     Show these instructions
@@ -53,7 +53,7 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
  Connectivity checks:
 
-   -w <Seconds>   Wait between handshake checks     (default: 180)
+   -w <Seconds>   Wait between handshake checks     (default: 180)  
    -t <Seconds>   Handshake timeout                 (default: 300)
    -q <0/1>       Quit on interface not found       (default: 0)
    -p <0/1>       Test ping                         (default: 1)
@@ -92,6 +92,6 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
                                     CAUTION: Client interface args are only applied to the
                                     client when loaded/started and will therefore not be set again.
-
+```
 
 
