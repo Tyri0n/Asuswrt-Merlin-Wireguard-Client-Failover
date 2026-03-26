@@ -53,7 +53,7 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
  Connectivity checks:
 
-   -w <Seconds>   Wait between handshake checks     (default: 180)  
+   -w <Seconds>   Wait between handshake checks     (default: 180)
    -t <Seconds>   Handshake timeout                 (default: 300)
    -q <0/1>       Quit on interface not found       (default: 0)
    -p <0/1>       Test ping                         (default: 1)
@@ -86,12 +86,17 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
      --disablewan1check     Don't check secondary WAN interface
 
-     --attachtorunningclientconfig  If the running client config description matches an
-                                    entry in the failover config, then don't reload the
-                                    client config but just resume monitoring it.
+     --attachtorunningclient  If the running client config description matches an
+                              entry in the failover config, then don't reload the
+                              client config but just resume monitoring it.
 
-                                    CAUTION: Client interface args are only applied to the
-                                    client when loaded/started and will therefore not be set again.
+                              CAUTION: Client interface args are only applied to the
+                              client when loaded/started and will therefore not be set again.
+
+     --qoneuccc     Quit on external unmonitored client config change: in other words,
+                      if the monitored client config description has changed (probably by
+                      loading a different config in the router's UI) and is not in
+                      the failover config, then byebye
 ```
 
 
