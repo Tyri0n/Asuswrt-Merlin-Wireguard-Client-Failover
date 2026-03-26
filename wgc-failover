@@ -343,7 +343,7 @@ DetectExternalRunningClientConfigChange()
     return 0
   fi
 
-  LogSlack "CONNECTIVITY CHANGE: the monitored client config /'$wgClientDescription/' has externally changed to /'$runningDescr/'"
+  LogSlack "CONNECTIVITY CHANGE: the monitored client config \'$wgClientDescription\' has externally changed to \'$runningDescr\'"
   wgClientDescription=$runningDescr
   upSince=$(date) # somewhere between now and after prior handshake wait
 
