@@ -584,7 +584,6 @@ Main()
       if [ $ret -eq 0 ]; then
         continue
       elif [ $ret -eq 1 ]; then
-        Log "Skipping loading client config and restarting - just continuing to monitor the currently the active one"
         clientConfigSucc=1
       else
         if [ -n "$upSince" ]; then
@@ -727,14 +726,21 @@ Main()
 
 WaitForNTP()
 {
-  Log "Wait for NTP to sync"
+  logged=0
   while true; do
     if [ $(nvram get ntp_ready) -ne 0 ]; then
       break
     fi
+    if [ $logged -eq 0 ]; then
+      Log "Wait for NTP to sync"
+      logged=1
+    fi
     sleep 30
   done
-  Log "NTP sync success"
+
+  if [ $logged -eq 1 ]; then
+    Log "NTP sync success"
+  fi
 }
 
 TestPing()
@@ -925,4 +931,3 @@ Main
 Exit 5 "eof"
 ##############################################################################
 ##############################################################################
-
