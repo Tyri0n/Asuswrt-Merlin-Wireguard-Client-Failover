@@ -455,9 +455,9 @@ ShowUsage()
   echo "                              client when loaded/started and will therefore not be set again."
   echo ""
   echo "     --qoneuccc     Quit on external unmonitored client config change: in other words,"
-  echo "                      if the monitored client config description has changed (probably by"
-  echo "                      loading a different config in the router's UI) and is not in"
-  echo "                      the failover config, then byebye"
+  echo "                    if the monitored client config description has changed (probably by"
+  echo "                    loading a different config in the router's UI) and is not in"
+  echo "                    the failover config, then byebye"
   echo ""
   echo ""
   if [ $# -eq 0 ]; then
@@ -710,6 +710,19 @@ Main()
           else
             LogSlack "Continuing to monitor the externally loaded client config, although NOT in failover config - change behaviour by adding \'--qoneuccc\' arg"
           fi
+        fi
+
+        # check if formerly enabled killswitch has been disabled
+        if [ $killswitch -ne 0 ] && [ $(nvram get "$wgc"_enforce) -eq 0 ]; then
+          LogSlack "CONNECTIVITY CHANGE: kill switch was disabled - reenabling"
+          nvram set "$wgc"_enforce=1
+        fi
+
+        # check if dns server has changed
+        nvrdns=$(nvram get "$wgc"_dns)
+        if [ "$dnsServer" != "$nvrdns" ]; then
+          LogSlack "CONNECTIVITY CHANGE: dns server changed from \'$dnsServer'\ to \'$nvrdns\'"
+          dnsServer=$nvrdns
         fi
         
       done

@@ -94,9 +94,9 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
                               client when loaded/started and will therefore not be set again.
 
      --qoneuccc     Quit on external unmonitored client config change: in other words,
-                      if the monitored client config description has changed (probably by
-                      loading a different config in the router's UI) and is not in
-                      the failover config, then byebye
+                    if the monitored client config description has changed (probably by
+                    loading a different config in the router's UI) and is not in
+                    the failover config, then byebye
 ```
 
 
