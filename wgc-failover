@@ -64,6 +64,9 @@ ParseArgs()
             else
               ArgCmdLineOnly $arg ""
             fi
+          elif [ $arg == "--reload" ]; then
+            echo set reloadClientConfigOnDiff: 1
+            reloadClientConfigOnDiff=1
           else
             echo set var: \"$arg\"
             var=$arg
@@ -337,9 +340,17 @@ DetectExternalRunningClientConfigChange()
   echo "=== DetectExternalRunningClientConfigChange"
   runningDescr=$(nvram get "$wgc"_desc)
   echo "===  runningDescr: $runningDescr"
-  
+
   if [ "$wgClientDescription" == "$runningDescr" ]; then
-    echo "===    no change: 0"
+    echo "===    no description change: 0"
+
+    # check if current configs settings are the same on the router
+    CompareClientConfigFile
+    if [ "$compareClientConfigDiff" != "" ]; then
+      echo "===    client settings \'$compareClientConfigDiff\' change on router: 3"
+      return 3
+    fi
+
     return 0
   fi
 
@@ -375,10 +386,16 @@ readonly _wanWait=30
 readonly _disableWan1Check=0
 readonly _attachToRunningClient=0
 readonly _quitOnExternalAndUnmonitoredConfigChange=0
+readonly _reloadClientConfigOnDiff=0
 
 readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
 readonly _nslookupTargets="google.com,amazon.com,cloudflare.com"
 readonly _curlTargets=$_nslookupTargets
+
+readonly _alive=25
+readonly _firewall=1
+readonly _nat=1
+
 
 SetDefaults()
 {
@@ -395,6 +412,7 @@ SetDefaults()
   disableWan1Check=$_disableWan1Check
   attachToRunningClient=$_attachToRunningClient
   quitOnExternalAndUnmonitoredConfigChange=$_quitOnExternalAndUnmonitoredConfigChange
+  reloadClientConfigOnDiff=$_reloadClientConfigOnDiff
 
   pingTargets=$_pingTargets
   nslookupTargets=$_nslookupTargets
@@ -434,6 +452,8 @@ ShowUsage()
   echo "                  their default values (also shown above)"
   echo ""
   echo "   --logslackpath   Path to shell script to pass priority logs to"
+  echo ""
+  echo "   --reload       Reload client config if its settings are modified on the router"
   echo ""
   echo " [Options...] can also be specified per client config in failover config files (on previous line)"
   echo ""
@@ -585,33 +605,13 @@ Main()
         continue
       elif [ $ret -eq 1 ]; then
         clientConfigSucc=1
-      else
-        if [ -n "$upSince" ]; then
-          LogSlack "Previous client config was active since: $upSince"
-          unset upSince
-        fi
-
-        if ! [ -f $wgClientConfigFilePath ]; then
+      elif [ $ret -eq 2 ]; then
+        LoadAndStartClientConfig $wgClientConfigFilePath
+        if [ $? -eq 0 ]; then
           # try next config instead
-          LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next config"
+          LogSlack "FILE FAIL: couldn't load the client config \'$wgClientConfigFilePath\', will try next"
           continue
         fi
-
-        LogSlack "Loading client config $wgClientConfigFilePath as $wgClientDescription\n\t"$(ParamsString)
-
-        # stop client before changing client settings in nvram
-        service "stop_wgc $clientNum"
-        sleep 3
-
-        # read client config file into variables and generate nvram set commands
-        dnsServer=""
-        LoadClientConfigFile
-        clientConfigSucc=1
-        
-        # start client
-        service "start_wgc $clientNum"
-        upSince=$(date)
-        sleep 3
       fi
 
       # finished with this after initial client config started/attached
@@ -647,7 +647,7 @@ Main()
           failMsg="INTERFACE FAIL: $wgc not found"
           if [ $quitOnNoInterface -eq 0 ]; then
             LogSlack "$failMsg - expiring current client config"
-            Log "$wgClientDescription: client config active since: "$upSince
+            #Log "$wgClientDescription: client config active since: "$upSince
             break
           else
             Exit 3 "$failMsg (with quitOnNoInterface enabled)"
@@ -656,11 +656,18 @@ Main()
 
         # calc how much time passed since last handshake
         dateNow=$(date +%s);                        echo dateNow: $dateNow
-        dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $lhs
-        lhs=$(( $dateNow - $dateLhs ));             echo lhs: $lhs
+        dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
+
+        # if this is blank it probably means the client is stopped
+        if [ "$dateLhs" != "" ]; then
+          lhs=$(( $dateNow - $dateLhs ));   echo lhs: $lhs
+        else
+          LogSlack "HANDSHAKE FAIL: no handshake - assuming client is stopped, switching to next client config"
+          break;
+        fi
 
         # fail if lhs is nonsense
-        if [ -z $lhs ] || [ -z $dateLhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
+        if [ -z $lhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
           LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
           testsFailed="+Handshake"
         fi
@@ -700,7 +707,7 @@ Main()
         echo "=== sleeping for $adv secs"
         sleep $adv
 
-        # check/handle if the monitored client config (description) has changed
+        # check/handle if the monitored client config has changed
         DetectExternalRunningClientConfigChange; ret=$?
         if [ $ret -eq 1 ]; then
           LogSlack "Continuing to monitor the externally loaded client config"
@@ -710,19 +717,14 @@ Main()
           else
             LogSlack "Continuing to monitor the externally loaded client config, although NOT in failover config - change behaviour by adding \'--qoneuccc\' arg"
           fi
-        fi
-
-        # check if formerly enabled killswitch has been disabled
-        if [ $killswitch -ne 0 ] && [ $(nvram get "$wgc"_enforce) -eq 0 ]; then
-          LogSlack "CONNECTIVITY CHANGE: kill switch was disabled - reenabling"
-          nvram set "$wgc"_enforce=1
-        fi
-
-        # check if dns server has changed
-        nvrdns=$(nvram get "$wgc"_dns)
-        if [ "$dnsServer" != "$nvrdns" ]; then
-          LogSlack "CONNECTIVITY CHANGE: dns server changed from \'$dnsServer'\ to \'$nvrdns\'"
-          dnsServer=$nvrdns
+        elif [ $ret -eq 3 ]; then
+          LogSlack "CONNECTIVITY CHANGE: settings \'$compareClientConfigDiff\' changed on router from the monitored client config \'$wgClientDescription\', will reload"
+          LoadAndStartClientConfig $wgClientConfigFilePath
+          if [ $? -eq 0 ]; then
+            LogSlack "FILE FAIL: couldn't reload the client config \'$wgClientConfigFilePath\', will try next"
+            runningConfigItem=0
+            break
+          fi
         fi
         
       done
@@ -855,9 +857,24 @@ ParseFailoverConfigLine()
 
   clientConfigItem=$(( $clientConfigItem + 1 ))
 
+  if ! [ -f $wgClientConfigFilePath ]; then
+    Log "client config path \'$wgClientConfigFilePath\' is invalid"
+    wgClientConfigFilePath=""
+    clientConfigSucc=0
+    return 0
+  fi
+
   # check if we should attach or reload
   if [ $runningConfigItem -ne 0 ]; then
     if [ $clientConfigItem -eq $runningConfigItem ]; then
+
+      # check if current configs settings are the same
+      CompareClientConfigFile
+      if [ "$compareClientConfigDiff" != "" ]; then
+        LogSlack "Reloading the current runnning client config as some settings ["$compareClientConfigDiff"+] have been changed on the router"
+        return 2
+      fi
+
       # attach it is, then...
       LogSlack "Continuing with the current running client config: ($runningConfigItem) $wgClientDescription"
       return 1
@@ -873,6 +890,85 @@ ParseFailoverConfigLine()
 LoadClientConfigFile()
 {
   echo "=== LoadClientConfigFile"
+  ParseClientConfigFile
+
+  # set params in nvram
+  nvram set "$wgc"_priv=$ccfg_priv
+  nvram set "$wgc"_addr=$ccfg_addr
+  nvram set "$wgc"_dns=$ccfg_dns
+  nvram set "$wgc"_ppub=$ccfg_ppub
+  nvram set "$wgc"_aips=$ccfg_aips
+  nvram set "$wgc"_ep_addr=$ccfg_ep_addr
+  nvram set "$wgc"_ep_port=$ccfg_ep_port
+  nvram set "$wgc"_psk=$ccfg_psk
+
+  nvram set "$wgc"_desc="$wgClientDescription"
+  nvram set "$wgc"_alive=$_alive
+  nvram set "$wgc"_enable=1
+  nvram set "$wgc"_fw=$_firewall
+  nvram set "$wgc"_nat=$_nat
+  nvram set "$wgc"_enforce=$killswitch
+
+  dnsServer="$ccfg_dns"
+}
+
+CompareClientConfigFile()
+{
+  echo "=== CompareClientConfigFile"
+
+  compareClientConfigDiff=""
+  if [ $reloadClientConfigOnDiff -ne 0 ]; then
+    ParseClientConfigFile
+
+    if [ "$(nvram get "$wgc"_priv)" != "$ccfg_priv" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+priv"
+    fi
+    if [ "$(nvram get "$wgc"_addr)" != "$ccfg_addr" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+addr"
+    fi
+    if [ "$(nvram get "$wgc"_dns)" != "$ccfg_dns" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+dns"
+    fi
+    if [ "$(nvram get "$wgc"_aips)" != "$ccfg_aips" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+aips"
+    fi
+    if [ "$(nvram get "$wgc"_ep_addr)" != "$ccfg_ep_addr" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+ep_addr"
+    fi
+    if [ "$(nvram get "$wgc"_ep_port)" != "$ccfg_ep_port" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+ep_port"
+    fi
+    if [ "$(nvram get "$wgc"_psk)" != "$ccfg_psk" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+psk"
+    fi
+
+    if [ "$(nvram get "$wgc"_alive)" != "$_alive" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+alive"
+    fi
+    if [ "$(nvram get "$wgc"_fw)" != "$_firewall" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+firewall"
+    fi
+    if [ "$(nvram get "$wgc"_nat)" != "$_nat" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+nat"
+    fi
+    if [ "$(nvram get "$wgc"_enforce)" != "$killswitch" ]; then
+      compareClientConfigDiff=$compareClientConfigDiff"+killswitch"
+    fi
+  fi
+}
+
+ParseClientConfigFile()
+{
+  echo "=== ParseClientConfigFile"
+
+  ccfg_priv=""
+  ccfg_addr=""
+  ccfg_dns=""
+  ccfg_ppub=""
+  ccfg_aips=""
+  ccfg_ep_addr=""
+  ccfg_ep_port=""
+  ccfg_psk=""
 
   while read line
   do
@@ -880,61 +976,72 @@ LoadClientConfigFile()
     if [ "$line" == "" ]; then
       continue
     fi
-
     fc=${line:0:1}
     # if line starts with # it's a comment
     if [[ $fc  == '#' ]]; then
       continue
     fi
-
-    # remove spaces around equal sign to make formatting easy
-    if test "$line" != "${line%" = "*}"
+    if test "$line" != "${line%" = "*}" # remove spaces around equal sign to make formatting easy
     then
       lineFormatted="${line//" "/""}"
-      if test "$lineFormatted" != "${lineFormatted%"Address"*}"
-      then
-        nvram set "$wgc"_addr="${lineFormatted#*=}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"Endpoint"*}"
-      then
+      if test "$lineFormatted" != "${lineFormatted%"PrivateKey"*}"; then
+        ccfg_priv="${lineFormatted#*=}"
+      elif test "$lineFormatted" != "${lineFormatted%"Address"*}"; then
+        ccfg_addr="${lineFormatted#*=}"
+      elif test "$lineFormatted" != "${lineFormatted%"DNS"*}"; then
+        ccfg_dns="${lineFormatted#*=}"
+      elif test "$lineFormatted" != "${lineFormatted%"PublicKey"*}"; then
+        ccfg_ppub="${lineFormatted#*=}"
+      elif test "$lineFormatted" != "${lineFormatted%"AllowedIPs"*}"; then
+        ccfg_aips="${lineFormatted#*=}"
+      elif test "$lineFormatted" != "${lineFormatted%"Endpoint"*}"; then
         endpointFull="${lineFormatted#*=}"
-        nvram set "$wgc"_ep_addr="${endpointFull%:*}"
-        nvram set "$wgc"_ep_port="${endpointFull#*:}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"PublicKey"*}"
-      then
-        nvram set "$wgc"_ppub="${lineFormatted#*=}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"PrivateKey"*}"
-      then
-        nvram set "$wgc"_priv="${lineFormatted#*=}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"PresharedKey"*}"
-      then
-        nvram set "$wgc"_psk="${lineFormatted#*=}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"AllowedIPs"*}"
-      then
-        nvram set "$wgc"_aips="${lineFormatted#*=}"
-      fi
-      if test "$lineFormatted" != "${lineFormatted%"DNS"*}"
-      then
-        dnsServer="${lineFormatted#*=}"
-        echo "==== dnsServer: $dnsServer"
-        nvram set "$wgc"_dns=$dnsServer
+        ccfg_ep_addr="${endpointFull%:*}"
+        ccfg_ep_port="${endpointFull#*:}"
+      elif test "$lineFormatted" != "${lineFormatted%"PresharedKey"*}"; then
+        ccfg_psk="${lineFormatted#*=}"
       fi
     fi
   done < "$wgClientConfigFilePath"
-
-  # set params in nvram
-  nvram set "$wgc"_desc="$wgClientDescription"
-  nvram set "$wgc"_alive=25
-  nvram set "$wgc"_enable=1
-  nvram set "$wgc"_fw=1
-  nvram set "$wgc"_nat=1
-  nvram set "$wgc"_enforce=$killswitch
 }
 
+LoadAndStartClientConfig()
+{
+  path=$1
+  echo "LoadAndStartClientConfig: $path"
+
+  if ! [ -f $path ]; then
+    LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next"
+    wgClientConfigFilePath=""
+    clientConfigSucc=0
+    return 0
+  fi
+
+  wgClientConfigFilePath=$path
+
+  if [ -n "$upSince" ]; then
+    LogSlack "Previous client config was active since: $upSince"
+    unset upSince
+  fi
+
+  LogSlack "Loading client config $wgClientConfigFilePath as $wgClientDescription\n\t"$(ParamsString)
+
+  # stop client before changing client settings in nvram
+  service "stop_wgc $clientNum"
+  sleep 3
+
+  # read client config file into variables and generate nvram set commands
+  dnsServer=""
+  LoadClientConfigFile
+  clientConfigSucc=1
+  
+  # start client
+  service "start_wgc $clientNum"
+  upSince=$(date)
+  sleep 3
+
+  return 1
+}
 
 ##############################################################################
 # entry point

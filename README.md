@@ -74,6 +74,8 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
 
    --logslackpath   Path to shell script to pass priority logs to
 
+   --reload       Reload client config if its settings are modified on the router
+
  [Options...] can also be specified per client config in failover config files (on previous line)
 
    Command line only:
