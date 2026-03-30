@@ -351,6 +351,7 @@ DetectExternalRunningClientConfigChange()
       return 3
     fi
 
+    # continue with same client config
     return 0
   fi
 
@@ -362,7 +363,22 @@ DetectExternalRunningClientConfigChange()
   FindRunningClientConfig
   if [ $? -ne 0 ]; then
     echo "===    IN failover config: 1"
+
+    # check if current configs settings are the same on the router
+    CompareClientConfigFile
+    if [ "$compareClientConfigDiff" != "" ]; then
+      echo "===    client settings \'$compareClientConfigDiff\' change on router: 3(b)"
+      return 3
+    fi
+
+    # continue with new config
     return 1
+  fi
+
+  if [ $reloadClientConfigOnDiff -ne 0 ]; then
+    echo "===    NOT in failover config: 4"
+    # will try next client config
+    return 4
   fi
 
   echo "===    NOT in failover config: 2"
@@ -710,12 +726,12 @@ Main()
         # check/handle if the monitored client config has changed
         DetectExternalRunningClientConfigChange; ret=$?
         if [ $ret -eq 1 ]; then
-          LogSlack "Continuing to monitor the externally loaded client config"
+          LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config"
         elif [ $ret -eq 2 ]; then
           if [ $quitOnExternalAndUnmonitoredConfigChange -eq 1 ]; then
-            Exit 12 "Externally loaded client config NOT in failover config - change behaviour by removing \'--qoneuccc\' arg"
+            Exit 12 "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config - change behaviour by removing \'--qoneuccc\' arg"
           else
-            LogSlack "Continuing to monitor the externally loaded client config, although NOT in failover config - change behaviour by adding \'--qoneuccc\' arg"
+            LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config, although NOT in failover config - change behaviour by adding \'--qoneuccc\' arg"
           fi
         elif [ $ret -eq 3 ]; then
           LogSlack "CONNECTIVITY CHANGE: settings \'$compareClientConfigDiff\' changed on router from the monitored client config \'$wgClientDescription\', will reload"
@@ -725,6 +741,10 @@ Main()
             runningConfigItem=0
             break
           fi
+        elif [ $ret -eq 4 ]; then
+          LogSlack "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config, will try next - change behaviour by removing \'--reload\' arg"
+          runningConfigItem=0
+          break
         fi
         
       done
