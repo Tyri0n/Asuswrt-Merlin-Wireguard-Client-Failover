@@ -22,8 +22,8 @@ LogSlack()
 Slack()
 {
   if [ "$logSlackPath" != "" ]; then
-    escapedSlackMsg=$(echo $logPrefix"$@" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
-    $logSlackPath "$escapedSlackMsg" &> /dev/null &
+    escapedSlackMsg=$(echo $logPrefix"$*" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
+    $logSlackPath $escapedSlackMsg &> /dev/null &
   fi
 }
 
@@ -31,14 +31,14 @@ ParseArgs()
 {
   fromClientConfig=$1
   shift
-  echo "=== ParseArgs: fromClientConfig=$fromClientConfig $@"
+  echo "=== ParseArgs: fromClientConfig=$fromClientConfig $*"
 
   echo arg count: $#
   if [ $# -gt 1 ]; then
     unset var
 
     for arg in "${@:2}"; do
-      echo arg: $arg
+      echo "arg: $arg"
 
       if [[ ${arg:0:1} == '-' ]]; then
           if [ $arg == "--reset" ]; then
@@ -160,10 +160,10 @@ ArgCmdLineOnly()
   LogSlack "\'$1\' option is only valid from the command line' - discarding along with arg \'$2\'"
 }
 
-ArgFailoverConfigOnly()
-{
-  LogSlack "\'$1\' option is only valid from within the failover config' - discarding along with arg \'$2\'"
-}
+#ArgFailoverConfigOnly()
+#{
+#  LogSlack "\'$1\' option is only valid from within the failover config' - discarding along with arg \'$2\'"
+#}
 
 StartTimer()
 {
@@ -177,6 +177,7 @@ StopTimer()
 
 ParamsString()
 {
+  # shellcheck disable=SC2028
   echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait"
 }
 
@@ -197,6 +198,7 @@ Exit()
   ShowUsage $(( $code * -1 )) # can't exit with negative code
 }
 
+# shellcheck disable=SC2329
 OnTrap()
 {
   sig=$?
@@ -347,7 +349,7 @@ DetectExternalRunningClientConfigChange()
     # check if current configs settings are the same on the router
     CompareClientConfigFile
     if [ "$compareClientConfigDiff" != "" ]; then
-      echo "===    client settings \'$compareClientConfigDiff\' change on router: 3"
+      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3"
       return 3
     fi
 
@@ -367,7 +369,7 @@ DetectExternalRunningClientConfigChange()
     # check if current configs settings are the same on the router
     CompareClientConfigFile
     if [ "$compareClientConfigDiff" != "" ]; then
-      echo "===    client settings \'$compareClientConfigDiff\' change on router: 3(b)"
+      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3(b)"
       return 3
     fi
 
@@ -509,7 +511,7 @@ Init()
   logPrefix="wgc-failover: "
 
   # try and keep track of unexpected terminations
-  trap OnTrap SIGHUP SIGINT SIGQUIT SIGKILL SIGSTOP SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
+  trap OnTrap SIGHUP SIGINT SIGQUIT SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
 
   if [ $# -eq 0 ] || [ $1 == "-h" ] || [ $1 == "--help" ]; then
     ShowUsage
@@ -783,7 +785,6 @@ TestPing()
   echo ""; echo "============= test ping ============="
 
   StartTimer
-  pingOk=0
   for ip in ${pingTargets//,/ }; do
     echo ""; echo "=== pinging $ip..."; echo ""
     ping -I $wgc -c 1 -w 1 $ip 2>&1
@@ -804,7 +805,6 @@ TestDNS()
     echo ""; echo "============= test dns ============="
 
     StartTimer
-    dnsOk=0
     for domain in ${nslookupTargets//,/ }; do
       echo ""; echo "=== looking up $domain via $dnsServer..."; echo ""
       nslookup $domain $1 2>&1
@@ -825,7 +825,6 @@ TestCurl()
   echo ""; echo "============= test curl ============="
 
   StartTimer
-  curlOk=0
   for domain in ${curlTargets//,/ }; do
     echo ""; echo "=== curling $domain..."; echo ""
     curl -s --no-progress-meter --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
@@ -891,7 +890,7 @@ ParseFailoverConfigLine()
       # check if current configs settings are the same
       CompareClientConfigFile
       if [ "$compareClientConfigDiff" != "" ]; then
-        LogSlack "Reloading the current runnning client config as some settings ["$compareClientConfigDiff"+] have been changed on the router"
+        LogSlack "Reloading the current runnning client config as some settings [$compareClientConfigDiff+] have been changed on the router"
         return 2
       fi
 
@@ -1066,6 +1065,17 @@ LoadAndStartClientConfig()
 ##############################################################################
 # entry point
 ##############################################################################
+
+#logPrefix="test"
+#logSlackPath="/jffs/scripts/mh/sendToSlack.sh"
+
+#LogSlack 1 2 3 4 
+#LogSlack "\t\t\n4\n\t\t\n5\t\t\n6"
+
+#exit 0
+
+
+
 Init $@
 Main
 Exit 5 "eof"
