@@ -203,7 +203,7 @@ OnTrap()
 {
   sig=$?
   # why does ^C = 130?
-  trap - SIGHUP SIGINT SIGQUIT SIGKILL SIGSTOP SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
+  trap - SIGHUP SIGINT SIGQUIT SIGABRT SIGALRM SIGFPE SIGILL SIGPIPE SIGSEGV SIGTERM SIGUSR1 SIGUSR2
   Exit 4 "trapped: $sig"
 }
 
@@ -1065,17 +1065,6 @@ LoadAndStartClientConfig()
 ##############################################################################
 # entry point
 ##############################################################################
-
-#logPrefix="test"
-#logSlackPath="/jffs/scripts/mh/sendToSlack.sh"
-
-#LogSlack 1 2 3 4 
-#LogSlack "\t\t\n4\n\t\t\n5\t\t\n6"
-
-#exit 0
-
-
-
 Init $@
 Main
 Exit 5 "eof"
