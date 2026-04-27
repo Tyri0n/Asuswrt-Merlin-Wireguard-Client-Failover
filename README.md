@@ -69,12 +69,25 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
    -ct <"URL,...">  Comma-separated list of URLs for curl test in quotes
                         (default: "google.com,amazon.com,cloudflare.com")
 
+   --reload       Reload client config if its settings are modified on the router
+
+ Misc:
+
+   -l <Amount>   Load another client config after Nth handshake                 (default: 0)
+                   (0 to disable)
+
+   -m <Time>     Load another client config after time in 24h format            (default: 0)
+                   e.g. 345 for 3:45am. Can combine with "-l" arg above
+                   (0 to disable - this includes 12am)
+
+   -s <Amount>   Modulo to apply when skipping random amount of client configs  (default: 0)
+                   with "-l" and/or "-m"  args above, e.g. 3 will skip 0,1,or 2
+                   (0 to disable - will just switch to next client config)
+
    --reset        Resets any of the previous args shown above to
                   their default values (also shown above)
 
    --logslackpath   Path to shell script to pass priority logs to
-
-   --reload       Reload client config if its settings are modified on the router
 
  [Options...] can also be specified per client config in failover config files (on previous line)
 

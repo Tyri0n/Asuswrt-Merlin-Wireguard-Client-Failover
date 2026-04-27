@@ -3,11 +3,13 @@
 # based on: https://github.com/MerryMens/AsusMerlin-WireGuard-Failover
 # added args, killswitch, wan(s)/ping/dns/curl tests, logic changes, filename changes, etc
 
+alias echod='echo [$(date +"%d-%m-%y %T")]'
+
 Log()
 {
   echo ""; echo "====================================="
   msg=$logPrefix"$@"
-  echo "=Log= $msg"
+  echod "=Log= $msg"
   escapedLoggerMsg=$(echo -e $msg)
   logger -c "$escapedLoggerMsg"
   echo "^^^==================^^^"
@@ -31,7 +33,7 @@ ParseArgs()
 {
   fromClientConfig=$1
   shift
-  echo "=== ParseArgs: fromClientConfig=$fromClientConfig $*"
+  echod "=== ParseArgs: fromClientConfig=$fromClientConfig $*"
 
   echo arg count: $#
   if [ $# -gt 1 ]; then
@@ -105,6 +107,18 @@ ParseArgs()
               elif [ $var == "-a" ]; then
                   echo set wanWait: $arg
                   wanWait=$arg
+              elif [ $var == "-l" ]; then
+                  echo set loadRandomClientConfigAfterNthHandshake: $arg
+                  loadRandomClientConfigAfterNthHandshake=$arg
+              elif [ $var == "-m" ]; then
+                  echo set loadRandomClientConfigTime: $arg
+                  loadRandomClientConfigTime=$(echo $arg | sed 's/^0*//') # remove leading zeros as they cause number to be interpreted as octal
+                  if [ "$loadRandomClientConfigTime" == "" ]; then
+                    loadRandomClientConfigTime=0
+                  fi
+              elif [ $var == "-s" ]; then
+                  echo set loadRandomClientConfigSkipModulo: $arg
+                  loadRandomClientConfigSkipModulo=$arg
               else
                 LogSlack "unrecognised var \'$var\' - discarding that and arg \'$arg\'"
               fi
@@ -178,7 +192,7 @@ StopTimer()
 ParamsString()
 {
   # shellcheck disable=SC2028
-  echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait"
+  echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait\n\t\t[-l] load random client config after Nth handshake: $loadRandomClientConfigAfterNthHandshake\n\t\t[-m] load random client config after time: $loadRandomClientConfigTime\n\t\t[-s] load random client config skip modulo: $loadRandomClientConfigSkipModulo"
 }
 
 Exit()
@@ -209,7 +223,7 @@ OnTrap()
 
 GetWanIfName()
 {
-  echo "=== GetWanIfName: $1"
+  echod "=== GetWanIfName: $1"
 
   wan=""
 
@@ -244,7 +258,7 @@ GetWanIfName()
 
 IsWanUp()
 {
-  echo "=== IsWanUp: $1"
+  echod "=== IsWanUp: $1"
 
   # check if wan is actually enabled first
   enabled=$(nvram get wan_enable)
@@ -273,7 +287,7 @@ IsWanUp()
 WagWan()
 {
   wait=$1
-  echo "=== WagWan: $1"
+  echod "=== WagWan: $1"
   
   # check wan until it's up
   wanUp=0
@@ -316,7 +330,7 @@ WagWan()
 
 FindRunningClientConfig()
 {
-  echo "=== FindRunningClientConfig"
+  echod "=== FindRunningClientConfig"
   runningDescr=$(nvram get "$wgc"_desc)
   echo "===  runningDescr: $runningDescr"
 
@@ -339,7 +353,7 @@ FindRunningClientConfig()
 
 DetectExternalRunningClientConfigChange()
 {
-  echo "=== DetectExternalRunningClientConfigChange"
+  echod "=== DetectExternalRunningClientConfigChange"
   runningDescr=$(nvram get "$wgc"_desc)
   echo "===  runningDescr: $runningDescr"
 
@@ -349,11 +363,12 @@ DetectExternalRunningClientConfigChange()
     # check if current configs settings are the same on the router
     CompareClientConfigFile
     if [ "$compareClientConfigDiff" != "" ]; then
-      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3"
+      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3\n"
       return 3
     fi
 
     # continue with same client config
+      printf "===    client settings same on router: 0\n"
     return 0
   fi
 
@@ -369,7 +384,7 @@ DetectExternalRunningClientConfigChange()
     # check if current configs settings are the same on the router
     CompareClientConfigFile
     if [ "$compareClientConfigDiff" != "" ]; then
-      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3(b)"
+      printf "===    client settings \'$compareClientConfigDiff\' change on router: 3(b)\n"
       return 3
     fi
 
@@ -385,6 +400,11 @@ DetectExternalRunningClientConfigChange()
 
   echo "===    NOT in failover config: 2"
   return 2
+}
+
+RND_255()
+{
+  return $(printf "%d" 0x$(openssl rand -hex 2))
 }
 
 
@@ -405,6 +425,9 @@ readonly _disableWan1Check=0
 readonly _attachToRunningClient=0
 readonly _quitOnExternalAndUnmonitoredConfigChange=0
 readonly _reloadClientConfigOnDiff=0
+readonly _loadRandomClientConfigAfterNthHandshake=0
+readonly _loadRandomClientConfigTime=0
+readonly _loadRandomClientConfigSkipModulo=0
 
 readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
 readonly _nslookupTargets="google.com,amazon.com,cloudflare.com"
@@ -417,7 +440,7 @@ readonly _nat=1
 
 SetDefaults()
 {
-  echo "=== SetDefaults"
+  echod "=== SetDefaults"
   killswitch=$_killswitch
   hsWait=$_hsWait
   hsTimeout=$_hsTimeout
@@ -431,6 +454,9 @@ SetDefaults()
   attachToRunningClient=$_attachToRunningClient
   quitOnExternalAndUnmonitoredConfigChange=$_quitOnExternalAndUnmonitoredConfigChange
   reloadClientConfigOnDiff=$_reloadClientConfigOnDiff
+  loadRandomClientConfigAfterNthHandshake=$_loadRandomClientConfigAfterNthHandshake
+  loadRandomClientConfigTime=$_loadRandomClientConfigTime
+  loadRandomClientConfigSkipModulo=$_loadRandomClientConfigSkipModulo
 
   pingTargets=$_pingTargets
   nslookupTargets=$_nslookupTargets
@@ -466,12 +492,25 @@ ShowUsage()
   echo "   -ct <\"URL,...\">  Comma-separated list of URLs for curl test in quotes"
   echo "                        (default: \"$_curlTargets\")"
   echo ""
+  echo "   --reload       Reload client config if its settings are modified on the router"
+  echo ""
+  echo " Misc:"
+  echo ""
+  echo "   -l <Amount>   Load another client config after Nth handshake                 (default: $_loadRandomClientConfigAfterNthHandshake)"
+  echo "                   (0 to disable)"
+  echo ""
+  echo "   -m <Time>     Load another client config after time in 24h format            (default: $_loadRandomClientConfigTime)"
+  echo "                   e.g. 345 for 3:45am". Can combine with \"-l\"" arg above"
+  echo "                   (0 to disable - this includes 12am)"
+  echo ""
+  echo "   -s <Amount>   Modulo to apply when skipping random amount of client configs  (default: $_loadRandomClientConfigSkipModulo)"
+  echo "                   with \"-l\" and/or \"-m\"  args above, e.g. 3 will skip 0,1,or 2"
+  echo "                   (0 to disable - will just switch to next client config)"
+  echo ""
   echo "   --reset        Resets any of the previous args shown above to"
   echo "                  their default values (also shown above)"
   echo ""
   echo "   --logslackpath   Path to shell script to pass priority logs to"
-  echo ""
-  echo "   --reload       Reload client config if its settings are modified on the router"
   echo ""
   echo " [Options...] can also be specified per client config in failover config files (on previous line)"
   echo ""
@@ -522,12 +561,13 @@ Init()
   failoverConfigPath=""
   clientConfigDir=""
   logSlackPath=""
+  loadRandWaitCurrDay=0
 
   Log "command line: $0 $@"
 
   # parse args
   #   - first is client number
-  echo "=== client num arg is: $1"
+  echod "=== client num arg is: $1"
   if [ $1 -eq $1 ] && [ $1 -gt 0 ] && [ $1 -le $maxWgc ]; then
     echo set client num: $1
     clientNum=$1
@@ -596,6 +636,7 @@ Main()
 
   runningConfigItem=0
   clientConfigSucc=0
+  skipClientConfigs=0
 
   # run forever
   while true
@@ -607,7 +648,7 @@ Main()
       FindRunningClientConfig
       runningConfigItem=$?
       if [ $runningConfigItem -ne 0 ]; then
-        echo "=== running client config: $runningConfigItem"
+        echod "=== running client config: $runningConfigItem"
       fi
     fi
 
@@ -654,11 +695,11 @@ Main()
         testsFailed=""
         adv=$hsWait
 
-        wgShow=$(wg show $wgc latest-handshakes)
-        echo "=== wg show $wgc latest-handshakes: $wgShow"
+        wgShow=$(wg show $wgc latest-handshakes 2>&1)
+        echod "=== wg show $wgc latest-handshakes: $wgShow"
 
         ifconfig=$(ifconfig $wgc 2>&1)
-        echo "=== ifconfig $wgc: $ifconfig"
+        echod "=== ifconfig $wgc: $ifconfig"
 
         # handle interface being shutdown, possibly in router ui
         if [ "$wgShow" == "Unable to access interface: No such device" ] || [ "$ifconfig" == "ifconfig: $wgc: error fetching interface information: Device not found" ]; then
@@ -707,7 +748,11 @@ Main()
           if [ $adv -lt 15 ]; then
             adv=15
           fi
-          LogSlack "CONNECTIVITY FAIL: [$testsFailed+], reducing next handshake wait to $adv seconds"
+          reducestr=""
+          if [ $adv -ne $hsWait ]; then
+            reducestr=", reducing next handshake wait to $adv seconds"
+          fi
+          LogSlack "CONNECTIVITY FAIL: [$testsFailed+]$reducestr"
         fi
 
         nhsm=$(( $nhs % $logEveryNthHandshake ))      
@@ -722,7 +767,7 @@ Main()
           break
         fi
 
-        echo "=== sleeping for $adv secs"
+        echod "=== sleeping for $adv secs"
         sleep $adv
 
         # check/handle if the monitored client config has changed
@@ -748,7 +793,58 @@ Main()
           runningConfigItem=0
           break
         fi
-        
+
+
+        # check/handle if a random client config load is due
+        loadRandNth=0
+        loadRandTime=0
+
+        if [ $loadRandomClientConfigAfterNthHandshake -eq 0 ]; then
+          loadRandNth=-1
+        elif [ $nhs -ge $loadRandomClientConfigAfterNthHandshake ]; then
+          loadRandNth=1
+        fi
+
+        if [ $loadRandomClientConfigTime -eq 0 ]; then
+          loadRandTime=-1
+        else
+          day=$(( $(date +"%d") ))
+          if [ $loadRandWaitCurrDay -eq 0 ] || [ $day -ne $loadRandWaitCurrDay ]; then
+            now=$(date +"%H%M" | sed 's/^0*//')
+            if [ "$now" == "" ]; then
+              now=0
+            fi
+            if [ $now -ge $loadRandomClientConfigTime ]; then
+              loadRandTime=1
+              loadRandWaitCurrDay=$day
+            fi
+          fi
+        fi
+
+        echo ""
+        echo "=== loadRandNth=$loadRandNth, loadRandTime=$loadRandTime, loadRandWaitCurrDay=$loadRandWaitCurrDay"
+
+        loadRand=false
+        if [ $loadRandNth -eq 1 ]; then
+          if [ $loadRandTime -ne 0 ]; then
+            loadRand=true
+            LogSlack "expiring current client config to load another random one (-l randNth)"
+          fi
+        elif [ $loadRandNth -eq -1 ]; then
+          if [ $loadRandTime -eq 1 ]; then
+            loadRand=true
+            LogSlack "expiring current client config to load another random one (-m randTime)"
+          fi
+        fi
+        if [ "$loadRand" = true ]; then
+          if [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
+            RND_255
+            skipClientConfigs=$(( $? % $loadRandomClientConfigSkipModulo ))
+          fi
+          echo "=== skipClientConfigs=$skipClientConfigs"
+          break
+        fi
+
       done
     done < "$wgFailoverConfigFilePath"
 
@@ -782,7 +878,7 @@ WaitForNTP()
 
 TestPing()
 {
-  echo ""; echo "============= test ping ============="
+  echo ""; echod "============= test ping ============="
 
   StartTimer
   for ip in ${pingTargets//,/ }; do
@@ -802,7 +898,7 @@ TestPing()
 TestDNS()
 {
   if [ "$1" != "" ]; then
-    echo ""; echo "============= test dns ============="
+    echo ""; echod "============= test dns ============="
 
     StartTimer
     for domain in ${nslookupTargets//,/ }; do
@@ -822,7 +918,7 @@ TestDNS()
 
 TestCurl()
 {
-  echo ""; echo "============= test curl ============="
+  echo ""; echod "============= test curl ============="
 
   StartTimer
   for domain in ${curlTargets//,/ }; do
@@ -843,7 +939,7 @@ TestCurl()
 ParseFailoverConfigLine()
 {
   line=$@
-  echo "=== ParseFailoverConfigLine: $line"
+  echod "=== ParseFailoverConfigLine: $line"
 
   # skip blank line
   if [ "$line" == "" ]; then
@@ -883,6 +979,14 @@ ParseFailoverConfigLine()
     return 0
   fi
 
+  if [ $skipClientConfigs -ne 0 ]; then
+    skipClientConfigs=$(( $skipClientConfigs - 1 ))
+    Log "skipping config item [$clientConfigItem]"
+    wgClientConfigFilePath=""
+    clientConfigSucc=-1
+    return 0
+  fi
+
   # check if we should attach or reload
   if [ $runningConfigItem -ne 0 ]; then
     if [ $clientConfigItem -eq $runningConfigItem ]; then
@@ -908,7 +1012,7 @@ ParseFailoverConfigLine()
 
 LoadClientConfigFile()
 {
-  echo "=== LoadClientConfigFile"
+  echod "=== LoadClientConfigFile"
   ParseClientConfigFile
 
   # set params in nvram
@@ -933,7 +1037,7 @@ LoadClientConfigFile()
 
 CompareClientConfigFile()
 {
-  echo "=== CompareClientConfigFile"
+  echod "=== CompareClientConfigFile"
 
   compareClientConfigDiff=""
   if [ $reloadClientConfigOnDiff -ne 0 ]; then
@@ -978,7 +1082,7 @@ CompareClientConfigFile()
 
 ParseClientConfigFile()
 {
-  echo "=== ParseClientConfigFile"
+  echod "=== ParseClientConfigFile"
 
   ccfg_priv=""
   ccfg_addr=""
@@ -1027,7 +1131,7 @@ ParseClientConfigFile()
 LoadAndStartClientConfig()
 {
   path=$1
-  echo "LoadAndStartClientConfig: $path"
+  echod "LoadAndStartClientConfig: $path"
 
   if ! [ -f $path ]; then
     LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next"
