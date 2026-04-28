@@ -313,7 +313,7 @@ WagWan()
 
     if [ $wasDown -eq 0 ]; then
       wasDown=1
-      wanDownSince=$(date)
+      wanDownSince=$(date +"%d-%m-%y %T")
       Log "CONNECTIVITY FAIL: WAN is DOWN, will silently check again every $wait seconds"
     fi
 
@@ -328,6 +328,8 @@ WagWan()
   return $wasDown
 }
 
+BeginsWith() { case $2 in "$1"*) true;; *) false;; esac; }
+
 FindRunningClientConfig()
 {
   echod "=== FindRunningClientConfig"
@@ -341,7 +343,8 @@ FindRunningClientConfig()
       if [ $fc  != '#' ] && [ $fc  != '-' ]; then
         clientConfigItem=$(( $clientConfigItem + 1 ))
         descr="$(echo $line | cut -d " " -f2)"
-        if [ "$descr" == "$runningDescr" ]; then
+        BeginsWith $runningDescr $descr
+        if [ $? = 0 ]; then
           echo "===    found: $clientConfigItem"
           return $clientConfigItem
         fi
@@ -374,7 +377,7 @@ DetectExternalRunningClientConfigChange()
 
   LogSlack "CONNECTIVITY CHANGE: the monitored client config \'$wgClientDescription\' has externally changed to \'$runningDescr\'"
   wgClientDescription=$runningDescr
-  upSince=$(date) # somewhere between now and after prior handshake wait
+  upSince=$(date +"%d-%m-%y %T") # somewhere between now and after prior handshake wait
 
   # is the new client config in the failover config?
   FindRunningClientConfig
@@ -776,9 +779,9 @@ Main()
           LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config"
         elif [ $ret -eq 2 ]; then
           if [ $quitOnExternalAndUnmonitoredConfigChange -eq 1 ]; then
-            Exit 12 "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config - change behaviour by removing \'--qoneuccc\' arg"
+            Exit 12 "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config, (can change behaviour by removing \'--qoneuccc\' arg)"
           else
-            LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config, although NOT in failover config - change behaviour by adding \'--qoneuccc\' arg"
+            LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config, although NOT in failover config (change behaviour by adding \'--qoneuccc\' arg)"
           fi
         elif [ $ret -eq 3 ]; then
           LogSlack "CONNECTIVITY CHANGE: settings \'$compareClientConfigDiff\' changed on router from the monitored client config \'$wgClientDescription\', will reload"
@@ -789,7 +792,7 @@ Main()
             break
           fi
         elif [ $ret -eq 4 ]; then
-          LogSlack "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config, will try next - change behaviour by removing \'--reload\' arg"
+          LogSlack "CONNECTIVITY CHANGE: Externally loaded client config NOT in failover config, will try next (change behaviour by removing \'--reload\' arg)"
           runningConfigItem=0
           break
         fi
@@ -825,18 +828,23 @@ Main()
         echo "=== loadRandNth=$loadRandNth, loadRandTime=$loadRandTime, loadRandWaitCurrDay=$loadRandWaitCurrDay"
 
         loadRand=false
+        loadRandMsg="expiring current client config to load another random one, reason(s):"
         if [ $loadRandNth -eq 1 ]; then
           if [ $loadRandTime -ne 0 ]; then
             loadRand=true
-            LogSlack "expiring current client config to load another random one (-l randNth)"
+            loadRandMsg=$loadRandMsg" (handshake #$nhs >= -l #$loadRandomClientConfigAfterNthHandshake)"
+            if [ $loadRandTime -eq 1 ]; then
+              loadRandMsg=$loadRandMsg" (current time #$now >= -m #$loadRandomClientConfigTime)"
+            fi
           fi
         elif [ $loadRandNth -eq -1 ]; then
           if [ $loadRandTime -eq 1 ]; then
             loadRand=true
-            LogSlack "expiring current client config to load another random one (-m randTime)"
+            loadRandMsg=$loadRandMsg" (current time #$now >= -m #$loadRandomClientConfigTime)"
           fi
         fi
         if [ "$loadRand" = true ]; then
+          LogSlack $loadRandMsg
           if [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
             RND_255
             skipClientConfigs=$(( $? % $loadRandomClientConfigSkipModulo ))
@@ -1160,7 +1168,7 @@ LoadAndStartClientConfig()
   
   # start client
   service "start_wgc $clientNum"
-  upSince=$(date)
+  upSince=$(date +"%d-%m-%y %T")
   sleep 3
 
   return 1
