@@ -565,7 +565,8 @@ Init()
   clientConfigDir=""
   logSlackPath=""
   loadRandWaitCurrDay=0
-
+  clientMaybeStopped=0
+  
   Log "command line: $0 $@"
 
   # parse args
@@ -720,54 +721,67 @@ Main()
         dateNow=$(date +%s);                        echo dateNow: $dateNow
         dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
 
-        # if this is blank it probably means the client is stopped
-        if [ "$dateLhs" != "" ]; then
-          lhs=$(( $dateNow - $dateLhs ));   echo lhs: $lhs
+        # blank or 0 lhs date seems to indicate client stopped
+        if [ "$dateLhs" == "" ] || [ $dateLhs -eq 0 ]; then
+          clientMaybeStopped=$(( $clientMaybeStopped + 1 ))
         else
-          LogSlack "HANDSHAKE FAIL: no handshake - assuming client is stopped, switching to next client config"
-          break;
+          clientMaybeStopped=0
         fi
 
-        # fail if lhs is nonsense
-        if [ -z $lhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
-          LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
-          testsFailed="+Handshake"
-        fi
-
-        if [ $testPing -ne 0 ]; then
-          TestPing
-        fi
-
-        if [ $testDns -ne 0 ]; then
-          TestDNS $dnsServer
-        fi
-
-        if [ $testCurl -ne 0 ]; then
-          TestCurl
-        fi
-
-        # failures can modify next handshake wait
-        if [ "$testsFailed" != "" ]; then
-          if [ $adv -lt 15 ]; then
-            adv=15
+        # don't immediately expire client config if client apparently stopped on the first occasion in a row
+        if [ $clientMaybeStopped -eq 1 ]; then
+          adv=25
+          LogSlack "HANDSHAKE ANOMALY: handshake date is blank or #0 - assuming client is stopped (for the first time in a row), restarting client and will try again after $adv secs"
+          service "restart_wgc $clientNum"
+        else
+          if [ $clientMaybeStopped -eq 0 ]; then
+            lhs=$(( $dateNow - $dateLhs ));   echo lhs: $lhs
+          else
+            LogSlack "HANDSHAKE FAIL: no handshake - assuming client is stopped, switching to next client config"
+            break;
           fi
-          reducestr=""
-          if [ $adv -ne $hsWait ]; then
-            reducestr=", reducing next handshake wait to $adv seconds"
+
+          # fail if lhs is nonsense
+          if [ -z $lhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
+            LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
+            testsFailed="+Handshake"
           fi
-          LogSlack "CONNECTIVITY FAIL: [$testsFailed+]$reducestr"
-        fi
 
-        nhsm=$(( $nhs % $logEveryNthHandshake ))      
-        nhs=$(( $nhs + 1 ))
-        if [ $nhsm -eq 0 ]; then
-          Log "$wgClientDescription: handshake #$nhs was $lhs secs ago"
-        fi
+          if [ $testPing -ne 0 ]; then
+            TestPing
+          fi
 
-        # give up on this client config if out of action for too long
-        if [ $lhs -ge $hsTimeout ]; then
-          LogSlack "HANDSHAKE FAIL: stale value of $lhs secs >= $hsTimeout, switching to next client config"
-          break
+          if [ $testDns -ne 0 ]; then
+            TestDNS $dnsServer
+          fi
+
+          if [ $testCurl -ne 0 ]; then
+            TestCurl
+          fi
+
+          # failures can modify next handshake wait
+          if [ "$testsFailed" != "" ]; then
+            if [ $adv -lt 15 ]; then
+              adv=15
+            fi
+            reducestr=""
+            if [ $adv -ne $hsWait ]; then
+              reducestr=", reducing next handshake wait to $adv seconds"
+            fi
+            LogSlack "CONNECTIVITY FAIL: [$testsFailed+]$reducestr"
+          fi
+
+          nhsm=$(( $nhs % $logEveryNthHandshake ))      
+          nhs=$(( $nhs + 1 ))
+          if [ $nhsm -eq 0 ]; then
+            Log "$wgClientDescription: handshake #$nhs was $lhs secs ago"
+          fi
+
+          # give up on this client config if out of action for too long
+          if [ $lhs -ge $hsTimeout ]; then
+            LogSlack "HANDSHAKE FAIL: stale value of $lhs secs >= $hsTimeout, switching to next client config"
+            break
+          fi
         fi
 
         echod "=== sleeping for $adv secs"
@@ -1149,7 +1163,7 @@ LoadAndStartClientConfig()
   fi
 
   wgClientConfigFilePath=$path
-
+  
   if [ -n "$upSince" ]; then
     LogSlack "Previous client config was active since: $upSince"
     unset upSince
@@ -1165,11 +1179,14 @@ LoadAndStartClientConfig()
   dnsServer=""
   LoadClientConfigFile
   clientConfigSucc=1
+  sleep 1
   
   # start client
   service "start_wgc $clientNum"
   upSince=$(date +"%d-%m-%y %T")
   sleep 3
+
+  clientMaybeStopped=0
 
   return 1
 }
