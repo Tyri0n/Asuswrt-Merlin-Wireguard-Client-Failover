@@ -825,7 +825,7 @@ Main()
         if [ $loadRandomClientConfigTime -eq 0 ]; then
           loadRandTime=-1
         else
-          day=$(( $(date +"%d") ))
+          day=$(( $(date +"%d" | sed 's/^0*//') ))
           if [ $loadRandWaitCurrDay -eq 0 ] || [ $day -ne $loadRandWaitCurrDay ]; then
             now=$(date +"%H%M" | sed 's/^0*//')
             if [ "$now" == "" ]; then
