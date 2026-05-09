@@ -842,7 +842,7 @@ Main()
         echo "=== loadRandNth=$loadRandNth, loadRandTime=$loadRandTime, loadRandWaitCurrDay=$loadRandWaitCurrDay"
 
         loadRand=false
-        loadRandMsg="expiring current client config to load another random one, reason(s):"
+        loadRandMsg="expiring the current client config to load another, reason(s):"
         if [ $loadRandNth -eq 1 ]; then
           if [ $loadRandTime -ne 0 ]; then
             loadRand=true
@@ -858,12 +858,13 @@ Main()
           fi
         fi
         if [ "$loadRand" = true ]; then
-          LogSlack $loadRandMsg
           if [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
             RND_255
             skipClientConfigs=$(( $? % $loadRandomClientConfigSkipModulo ))
           fi
           echo "=== skipClientConfigs=$skipClientConfigs"
+          [ $loadRandomClientConfigSkipModulo -ne 0 ] && loadRandMsg=$loadRandMsg", skipping the next #$skipClientConfigs configs (-s #$loadRandomClientConfigSkipModulo)"
+          LogSlack $loadRandMsg
           break
         fi
 
