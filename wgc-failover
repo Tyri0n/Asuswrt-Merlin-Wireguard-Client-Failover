@@ -152,7 +152,7 @@ ParseArgs()
                 nslookupTargets=$arg
               elif [ $var == "-ct" ]; then
                 echo set curlTargets: $arg
-                pingTargets=$arg
+                curlTargets=$arg
               else
                 LogSlack "param arg \'$arg\' for var \'$var\' is not a number - discarding both"
               fi
@@ -410,6 +410,23 @@ RND_255()
   return $(printf "%d" 0x$(openssl rand -hex 2))
 }
 
+GetVal()
+{
+  # $1 : pattern
+  # $2 : field index
+  i=$2
+  field=$(( $i + 1 ))
+  gotval=$( echo $1 | awk -v field="$field" -F, '{print $field}' )
+  if [ -f $gotval ]; then
+    # return first field on error
+    i=0
+    field=1
+    gotval=$( echo $1 | awk -v field="$field" -F, '{print $field}' )
+  fi
+  #echo "GetVal($1, [$2]): field=$field, val=$gotval, ind=$i"
+  return $i # return field index
+}
+
 
 readonly maxWgc=5
 readonly wanUpAgainWait=15
@@ -641,6 +658,10 @@ Main()
   runningConfigItem=0
   clientConfigSucc=0
   skipClientConfigs=0
+  
+  nextPingInd=0
+  nextCurlInd=0
+  nextDnsInd=0
 
   # run forever
   while true
@@ -685,6 +706,7 @@ Main()
       lhs=0
       unset wgShow
       nhs=0
+      dateLts=""
 
       while true
       do
@@ -759,8 +781,21 @@ Main()
             TestCurl
           fi
 
-          # failures can modify next handshake wait
+          # test failures can modify next handshake wait and are now subject to the handshake timeout
+          if [ "$dateLts" == "" ]; then
+            dateLts=$dateNow; echo dateLts $dateLts
+          else
+            dateNow=$(date +%s); echo dateNow: $dateNow
+          fi
+
           if [ "$testsFailed" != "" ]; then
+            # give up on this client config if failing tests for too long
+            lts=$(( $dateNow - $dateLts ));   echo lts: $lts
+            if [ $lts -ge $hsTimeout ]; then
+              LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
+              break
+            fi
+
             if [ $adv -lt 15 ]; then
               adv=15
             fi
@@ -904,11 +939,30 @@ TestPing()
   echo ""; echod "============= test ping ============="
 
   StartTimer
-  for ip in ${pingTargets//,/ }; do
+
+  si=$nextPingInd
+  wrapped=0
+  while true; do
+    GetVal $pingTargets $nextPingInd
+    ind=$?
+
+    if [ $ind -ne $nextPingInd ]; then
+      [ $wrapped -ne 0 ] && break;
+      [ $si -eq 0 ] && break;
+      wrapped=1
+    fi
+
+    nextPingInd=$(( $ind + 1))
+
+    ip=$gotval
     echo ""; echo "=== pinging $ip..."; echo ""
     ping -I $wgc -c 1 -w 1 $ip 2>&1
     if [ $? -eq 0 ]; then
       return
+    fi
+
+    if [ $nextPingInd -eq $si ]; then
+      break
     fi
   done
 
@@ -921,14 +975,33 @@ TestPing()
 TestDNS()
 {
   if [ "$1" != "" ]; then
-    echo ""; echod "============= test dns ============="
+    echo ""; echod "============= test dns via $1 ============="
 
     StartTimer
-    for domain in ${nslookupTargets//,/ }; do
+
+    si=$nextDnsInd
+    wrapped=0
+    while true; do
+      GetVal $nslookupTargets $nextDnsInd
+      ind=$?
+
+      if [ $ind -ne $nextDnsInd ]; then
+        [ $wrapped -ne 0 ] && break;
+        [ $si -eq 0 ] && break;
+        wrapped=1
+      fi
+
+      nextDnsInd=$(( $ind + 1))
+
+      domain=$gotval
       echo ""; echo "=== looking up $domain via $dnsServer..."; echo ""
       nslookup $domain $1 2>&1
       if [ $? -eq 0 ]; then
         return
+      fi
+
+      if [ $nextDnsInd -eq $si ]; then
+        break
       fi
     done
 
@@ -944,11 +1017,30 @@ TestCurl()
   echo ""; echod "============= test curl ============="
 
   StartTimer
-  for domain in ${curlTargets//,/ }; do
+
+  si=$nextCurlInd
+  wrapped=0
+  while true; do
+    GetVal $curlTargets $nextCurlInd
+    ind=$?
+
+    if [ $ind -ne $nextCurlInd ]; then
+      [ $wrapped -ne 0 ] && break;
+      [ $si -eq 0 ] && break;
+      wrapped=1
+    fi
+
+    nextCurlInd=$(( $ind + 1))
+
+    domain=$gotval
     echo ""; echo "=== curling $domain..."; echo ""
     curl -s --no-progress-meter --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
     if [ $? -eq 0 ]; then
       return
+    fi
+
+    if [ $nextCurlInd -eq $si ]; then
+      break
     fi
   done
 
@@ -1023,6 +1115,7 @@ ParseFailoverConfigLine()
 
       # attach it is, then...
       LogSlack "Continuing with the current running client config: ($runningConfigItem) $wgClientDescription"
+      dnsServer="$(nvram get "$wgc"_dns)"
       return 1
     fi
     # try next line
