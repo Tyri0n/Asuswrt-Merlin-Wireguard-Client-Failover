@@ -4,7 +4,7 @@
 
 ## This script attempts to make sure the client is always connected to a server by performing various periodic connectivity tests and changes to a different client config should the running one fail
 
-## Can also be setup to periodically expire the current config and load either the next or a random one
+## Can also be setup to periodically expire the current client config and load either the next or a random one
 
 This script builds upon ```https://github.com/MerryMens/AsusMerlin-WireGuard-Failover```, adding more connectivity checks, options, etc.
 
