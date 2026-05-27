@@ -782,9 +782,9 @@ Main()
           fi
 
           # test failures can modify next handshake wait and are now subject to the handshake timeout
+          dateNow=$(date +%s);
           if [ "$testsFailed" != "" ]; then
             # give up on this client config if failing tests for too long
-            dateNow=$(date +%s);
             lts=$(( $dateNow - $dateLts ));   echo lts: $lts
             if [ $lts -ge $hsTimeout ]; then
               LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
