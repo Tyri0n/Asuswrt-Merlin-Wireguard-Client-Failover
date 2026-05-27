@@ -706,7 +706,7 @@ Main()
       lhs=0
       unset wgShow
       nhs=0
-      dateLts=""
+      dateLts=$(date +%s);
 
       while true
       do
@@ -782,14 +782,9 @@ Main()
           fi
 
           # test failures can modify next handshake wait and are now subject to the handshake timeout
-          if [ "$dateLts" == "" ]; then
-            dateLts=$dateNow; echo dateLts $dateLts
-          else
-            dateNow=$(date +%s); echo dateNow: $dateNow
-          fi
-
           if [ "$testsFailed" != "" ]; then
             # give up on this client config if failing tests for too long
+            dateNow=$(date +%s);
             lts=$(( $dateNow - $dateLts ));   echo lts: $lts
             if [ $lts -ge $hsTimeout ]; then
               LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
@@ -804,6 +799,8 @@ Main()
               reducestr=", reducing next handshake wait to $adv seconds"
             fi
             LogSlack "CONNECTIVITY FAIL: [$testsFailed+]$reducestr"
+          else
+            dateLts=$dateNow;
           fi
 
           nhsm=$(( $nhs % $logEveryNthHandshake ))      
