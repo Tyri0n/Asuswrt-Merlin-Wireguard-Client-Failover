@@ -663,20 +663,20 @@ Main()
   nextCurlInd=0
   nextDnsInd=0
 
+  LogSlack "Loading failover config: $wgFailoverConfigFilePath"
+  sleep 1
+
+  if [ $attachToRunningClient -ne 0 ]; then
+    FindRunningClientConfig
+    runningConfigItem=$?
+    if [ $runningConfigItem -ne 0 ]; then
+      echod "=== running client config: $runningConfigItem"
+    fi
+  fi
+
   # run forever
   while true
   do
-    LogSlack "Loading failover config: $wgFailoverConfigFilePath"
-    sleep 1
-
-    if [ $attachToRunningClient -ne 0 ]; then
-      FindRunningClientConfig
-      runningConfigItem=$?
-      if [ $runningConfigItem -ne 0 ]; then
-        echod "=== running client config: $runningConfigItem"
-      fi
-    fi
-
     clientConfigItem=0
 
     # read failover config file
@@ -769,26 +769,25 @@ Main()
             testsFailed="+Handshake"
           fi
 
-          if [ $testPing -ne 0 ]; then
-            TestPing
-          fi
-
-          if [ $testDns -ne 0 ]; then
-            TestDNS $dnsServer
-          fi
-
-          if [ $testCurl -ne 0 ]; then
-            TestCurl
-          fi
+          # peform any enabled connectivity tests
+          [ $testPing -ne 0 ] && TestPing;
+          [ $testDns -ne 0 ] && TestDNS $dnsServer;
+          [ $testCurl -ne 0 ] && TestCurl;
 
           # test failures can modify next handshake wait and are now subject to the handshake timeout
           dateNow=$(date +%s);
           if [ "$testsFailed" != "" ]; then
-            # give up on this client config if failing tests for too long
-            lts=$(( $dateNow - $dateLts ));   echo lts: $lts
-            if [ $lts -ge $hsTimeout ]; then
-              LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
-              break
+            # Only timeout due to to test fails if multiple simultaneous
+            cf=${testsFailed//[^+]}
+            cf=${#cf}
+            echo "===   tests fail count: $cf"
+            if [ $cf -gt 1 ]; then
+              # give up on this client config if failing tests for too long
+              lts=$(( $dateNow - $dateLts ));   echo lts: $lts
+              if [ $lts -ge $hsTimeout ]; then
+                LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
+                break
+              fi
             fi
 
             if [ $adv -lt 15 ]; then
