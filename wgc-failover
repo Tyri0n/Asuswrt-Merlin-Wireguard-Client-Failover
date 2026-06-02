@@ -1,4 +1,5 @@
 #!/bin/sh
+#set -x
 
 # based on: https://github.com/MerryMens/AsusMerlin-WireGuard-Failover
 # added args, killswitch, wan(s)/ping/dns/curl tests, logic changes, filename changes, etc
@@ -27,6 +28,23 @@ Slack()
     escapedSlackMsg=$(echo $logPrefix"$*" | sed 's/ / /g' | sed 's/(/[/g' | sed 's/)/]/g') # replace space and brackets
     $logSlackPath $escapedSlackMsg &> /dev/null &
   fi
+}
+
+IsNumber()
+{
+    arg="$1"
+    echo "IsNumber: $arg"
+    if [ -n "$arg" ]; then
+        [ ${arg:0:1}  == '-' ] && arg="${arg:1}"
+        if [ -n "$arg" ]; then
+            if [ -z "${arg//[0-9]}" ]; then
+                echo " > yes"
+                return 1
+            fi
+        fi
+    fi
+    echo " > no"
+    return 0
 }
 
 ParseArgs()
@@ -75,8 +93,8 @@ ParseArgs()
           fi
       else
           if [ -n "$var" ]; then
-            # this works but spams "bad number" # if [ $arg -eq $arg ]; then
-            if [ -z "${arg//[0-9]}" ]; then # this method would not recognise a negative number
+            IsNumber $arg
+            if [ $? -eq 1 ]; then
               if [ $var == "-k" ]; then
                   echo set killswitch: $arg
                   killswitch=$arg
@@ -427,6 +445,13 @@ GetVal()
   return $i # return field index
 }
 
+IsSubstring()
+{
+  case "$2" in
+      *"$1"*) return 1 ;;
+  esac
+  return 0
+}
 
 readonly maxWgc=5
 readonly wanUpAgainWait=15
@@ -721,6 +746,14 @@ Main()
         testsFailed=""
         adv=$hsWait
 
+        # make sure interface is enabled
+        wgcEnabled=$(nvram get "$wgc"_enable)
+        if [ $wgcEnabled -ne 1 ]; then
+          LogSlack "INTERFACE FAIL: $wgc is disabled - will enable"
+          nvram set "$wgc"_enable=1
+          sleep 5
+        fi
+
         wgShow=$(wg show $wgc latest-handshakes 2>&1)
         echod "=== wg show $wgc latest-handshakes: $wgShow"
 
@@ -731,9 +764,12 @@ Main()
         if [ "$wgShow" == "Unable to access interface: No such device" ] || [ "$ifconfig" == "ifconfig: $wgc: error fetching interface information: Device not found" ]; then
           failMsg="INTERFACE FAIL: $wgc not found"
           if [ $quitOnNoInterface -eq 0 ]; then
-            LogSlack "$failMsg - expiring current client config"
-            #Log "$wgClientDescription: client config active since: "$upSince
-            break
+            #LogSlack "$failMsg - expiring current client config"
+            ##Log "$wgClientDescription: client config active since: "$upSince
+            #break
+
+            LogSlack "$failMsg - unhandled - what to do here..."
+
           else
             Exit 3 "$failMsg (with quitOnNoInterface enabled)"
           fi
@@ -742,9 +778,14 @@ Main()
         # calc how much time passed since last handshake
         dateNow=$(date +%s);                        echo dateNow: $dateNow
         dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
+        IsNumber "$dateLhs" # will also catch blank value
+        if [ $? -eq 0 ]; then
+          LogSlack "HANDSHAKE ANOMALY: handshake date '$dateLhs' is not a number - setting to zero"
+          dateLhs=0;
+        fi
 
-        # blank or 0 lhs date seems to indicate client stopped
-        if [ "$dateLhs" == "" ] || [ $dateLhs -eq 0 ]; then
+        # zero lhs date seems to indicate client stopped
+        if [ $dateLhs -eq 0 ]; then
           clientMaybeStopped=$(( $clientMaybeStopped + 1 ))
         else
           clientMaybeStopped=0
@@ -777,11 +818,12 @@ Main()
           # test failures can modify next handshake wait and are now subject to the handshake timeout
           dateNow=$(date +%s);
           if [ "$testsFailed" != "" ]; then
-            # Only timeout due to to test fails if multiple simultaneous
+            # Only timeout due to to test fails if multiple simultaneous, or just dns fail
             cf=${testsFailed//[^+]}
             cf=${#cf}
             echo "===   tests fail count: $cf"
-            if [ $cf -gt 1 ]; then
+            IsSubstring "DNS" "$testsFailed";
+            if [ $? -eq 1 ] || [ $cf -gt 1 ]; then
               # give up on this client config if failing tests for too long
               lts=$(( $dateNow - $dateLts ));   echo lts: $lts
               if [ $lts -ge $hsTimeout ]; then
