@@ -780,7 +780,7 @@ Main()
         dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
         IsNumber "$dateLhs" # will also catch blank value
         if [ $? -eq 0 ]; then
-          LogSlack "HANDSHAKE ANOMALY: handshake date '$dateLhs' is not a number - setting to zero"
+          Log "HANDSHAKE ANOMALY: handshake date '$dateLhs' is not a number - setting to zero"
           dateLhs=0;
         fi
 
@@ -794,7 +794,7 @@ Main()
         # don't immediately expire client config if client apparently stopped on the first occasion in a row
         if [ $clientMaybeStopped -eq 1 ]; then
           adv=25
-          LogSlack "HANDSHAKE ANOMALY: handshake date is blank or #0 - assuming client is stopped (for the first time in a row), restarting client and will try again after $adv secs"
+          LogSlack "HANDSHAKE ANOMALY: handshake date was blank, #0, or not a number - assuming client is stopped (for the first time in a row), restarting client and will try again after $adv secs"
           service "restart_wgc $clientNum"
         else
           if [ $clientMaybeStopped -eq 0 ]; then
