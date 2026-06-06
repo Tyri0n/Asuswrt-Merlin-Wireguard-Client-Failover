@@ -329,6 +329,9 @@ WagWan()
       break
     fi
 
+    # wait param of <=0 means don't loop just return state
+    [ $wait -le 0 ] && return 1;
+
     if [ $wasDown -eq 0 ]; then
       wasDown=1
       wanDownSince=$(date +"%d-%m-%y %T")
@@ -818,19 +821,34 @@ Main()
           # test failures can modify next handshake wait and are now subject to the handshake timeout
           dateNow=$(date +%s);
           if [ "$testsFailed" != "" ]; then
-            # Only timeout due to to test fails if multiple simultaneous, or just dns fail
-            cf=${testsFailed//[^+]}
-            cf=${#cf}
-            echo "===   tests fail count: $cf"
-            IsSubstring "DNS" "$testsFailed";
-            if [ $? -eq 1 ] || [ $cf -gt 1 ]; then
-              # give up on this client config if failing tests for too long
-              lts=$(( $dateNow - $dateLts ));   echo lts: $lts
-              if [ $lts -ge $hsTimeout ]; then
-                LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
-                break
+            StartTimer
+
+            # make sure that tests haven't failed due to wan down
+            IsSubstring "WAN" "$testsFailed"
+            if [ $? -eq 1 ]; then
+              echo "===   tests failed due to wan down: $testsFailed"
+              # was down, wait for it to come back up
+              WagWan $wanWait
+              sleep 10
+              LogSlack "CONNECTIVITY FAIL: WAN was down, continuing, failed tests [$testsFailed+] will not trigger client config expiry"
+            else
+              # Only timeout due to to test fails if multiple simultaneous, or just dns fail
+              cf=${testsFailed//[^+]}
+              cf=${#cf}
+              echo "===   tests fail count: $cf"
+              IsSubstring "DNS" "$testsFailed"
+              if [ $? -eq 1 ] || [ $cf -gt 1 ]; then
+                # give up on this client config if failing tests for too long
+                lts=$(( $dateNow - $dateLts ));   echo lts: $lts
+                if [ $lts -ge $hsTimeout ]; then
+                  LogSlack "CONNECTIVITY FAIL: [$testsFailed+] for $lts secs (and >= handshake timeout #$hsTimeout), switching to next client config"
+                  break
+                fi
               fi
             fi
+
+            StopTimer
+            adv=$(( $adv - $? ))
 
             if [ $adv -lt 15 ]; then
               adv=15
@@ -994,9 +1012,18 @@ TestPing()
 
     ip=$gotval
     echo ""; echo "=== pinging $ip..."; echo ""
-    ping -I $wgc -c 1 -w 1 $ip 2>&1
-    if [ $? -eq 0 ]; then
+#    ping -I $wgc -c 1 -w 1 $ip 2>&1
+    ping -I $wgc -c 1 -w 5 $ip 2>&1
+    ret=$?
+    echo " > $ret"
+    if [ $ret -eq 0 ]; then
       return
+    fi
+
+    WagWan -1
+    if [ $? -eq 1 ]; then
+      testsFailed="$testsFailed+WAN"
+      break
     fi
 
     if [ $nextPingInd -eq $si ]; then
@@ -1034,8 +1061,16 @@ TestDNS()
       domain=$gotval
       echo ""; echo "=== looking up $domain via $dnsServer..."; echo ""
       nslookup $domain $1 2>&1
-      if [ $? -eq 0 ]; then
+      ret=$?
+      echo " > $ret"
+      if [ $ret -eq 0 ]; then
         return
+      fi
+
+      WagWan -1
+      if [ $? -eq 1 ]; then
+        testsFailed="$testsFailed+WAN"
+        break
       fi
 
       if [ $nextDnsInd -eq $si ]; then
@@ -1072,9 +1107,18 @@ TestCurl()
 
     domain=$gotval
     echo ""; echo "=== curling $domain..."; echo ""
-    curl -s --no-progress-meter --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
-    if [ $? -eq 0 ]; then
+#    curl -s --no-progress-meter --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
+    curl --connect-timeout 5 --max-time 15 --interface $wgc $domain 2>&1
+    ret=$?
+    echo " > $ret"
+    if [ $ret -eq 0 ]; then
       return
+    fi
+
+    WagWan -1
+    if [ $? -eq 1 ]; then
+      testsFailed="$testsFailed+WAN"
+      break
     fi
 
     if [ $nextCurlInd -eq $si ]; then
@@ -1086,7 +1130,6 @@ TestCurl()
   adv=$(( $adv - $? ))
 
   testsFailed="$testsFailed+Curl"
-  return 0
 }
 
 ParseFailoverConfigLine()
