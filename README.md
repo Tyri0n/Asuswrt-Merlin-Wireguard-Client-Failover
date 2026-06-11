@@ -79,8 +79,10 @@ Usage: wgc-failover [Client Number <1 to 5>] [Options...]
                    (0 to disable)
 
    -m <Time>     Load another client config after time in 24h format            (default: 0)
-                   e.g. 345 for 3:45am. Can combine with "-l" arg above
-                   (0 to disable - this includes 12am)
+                   e.g. 345 for 3:45am, or 25 for 12:45am. Can combine
+                   with "-l" arg above (0 to disable - this includes 12am)
+
+   -mm <Minutes>   Random modulo amount of minutes to add to -m arg             (default: 0)
 
    -s <Amount>   Modulo to apply when skipping random amount of client configs  (default: 0)
                    with "-l" and/or "-m"  args above, e.g. 3 will skip 0,1,or 2

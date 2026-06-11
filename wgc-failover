@@ -134,6 +134,12 @@ ParseArgs()
                   if [ "$loadRandomClientConfigTime" == "" ]; then
                     loadRandomClientConfigTime=0
                   fi
+              elif [ $var == "-mm" ]; then
+                  echo set loadRandomClientConfigTimeMinsIncr: $arg
+                  loadRandomClientConfigTimeMinsIncr=$arg
+                  if [ "$loadRandomClientConfigTimeMinsIncr" == "" ]; then
+                    loadRandomClientConfigTimeMinsIncr=0
+                  fi
               elif [ $var == "-s" ]; then
                   echo set loadRandomClientConfigSkipModulo: $arg
                   loadRandomClientConfigSkipModulo=$arg
@@ -210,7 +216,7 @@ StopTimer()
 ParamsString()
 {
   # shellcheck disable=SC2028
-  echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait\n\t\t[-l] load random client config after Nth handshake: $loadRandomClientConfigAfterNthHandshake\n\t\t[-m] load random client config after time: $loadRandomClientConfigTime\n\t\t[-s] load random client config skip modulo: $loadRandomClientConfigSkipModulo"
+  echo "params:\n\t\t[-k] kill switch: $killswitch\n\t\t[-w] handshake wait: $hsWait\n\t\t[-t] handshake timeout: $hsTimeout\n\t\t[-q] quit on no interface: $quitOnNoInterface\n\t\t[-p] test ping: $testPing\n\t\t[-d] test dns: $testDns\n\t\t[-c] test curl: $testCurl\n\t\t[-n] log every nth handshake: $logEveryNthHandshake\n\t\t[-a] WAN wait : $wanWait\n\t\t[-l] load random client config after Nth handshake: $loadRandomClientConfigAfterNthHandshake\n\t\t[-m] load random client config after time: $loadRandomClientConfigTime\n\t\t[-mm] random minutes modulo to add to -m arg: $loadRandomClientConfigTimeMinsIncr\n\t\t[-s] load random client config skip modulo: $loadRandomClientConfigSkipModulo"
 }
 
 Exit()
@@ -431,6 +437,51 @@ RND_255()
   return $(printf "%d" 0x$(openssl rand -hex 2))
 }
 
+# not particularly random
+#RND()
+#{
+#    max=214748364
+#    val=$(printf "%d" 0x$(openssl rand -hex 2))
+#    val=$(( $val % $max ))
+#    [ $# -gt 0 ] && val=$(( $val % $1 ))
+#    echo $val
+#    # read result from stdout
+#}
+
+RND()
+{
+  val=$(( $(hexdump -n 4 -v -e '"%u"' /dev/urandom) ))
+  [ $# -ne 0 ] && val=$(( val % $1 ))
+  echo $val | sed 's/-//g'
+  # read result from stdout
+}
+
+AddRndMins()
+{
+    tm=$1
+    mins=$2
+    rnd=$( RND $mins )
+    mins=$(( rnd % 60 ))
+    hrs=$(( rnd / 60 ))
+    hrs=$(( hrs % 24 ))
+    tmm=$(( tm % 100 ))
+    tmh=$(( tm - tmm ))
+    tmh=$(( tmh / 100 ))
+    tmh=$(( tmh + hrs ))
+    tmm=$(( tmm + mins ))
+    if [ $tmm -gt 59 ]; then
+        tmh=$(( tmh + 1 ))
+        tmm=$(( tmm % 60))
+    fi
+    tmh=$(( tmh % 24 ))
+    if [ $tmh -gt 0 ]; then
+        printf "%d%02d" $tmh $tmm
+    else
+        printf "%02d" $tmm
+    fi
+    # read result from stdout
+}    
+
 GetVal()
 {
   # $1 : pattern
@@ -475,6 +526,7 @@ readonly _quitOnExternalAndUnmonitoredConfigChange=0
 readonly _reloadClientConfigOnDiff=0
 readonly _loadRandomClientConfigAfterNthHandshake=0
 readonly _loadRandomClientConfigTime=0
+readonly _loadRandomClientConfigTimeMinsIncr=0
 readonly _loadRandomClientConfigSkipModulo=0
 
 readonly _pingTargets="8.8.8.8,1.1.1.1,9.9.9.9"
@@ -504,6 +556,7 @@ SetDefaults()
   reloadClientConfigOnDiff=$_reloadClientConfigOnDiff
   loadRandomClientConfigAfterNthHandshake=$_loadRandomClientConfigAfterNthHandshake
   loadRandomClientConfigTime=$_loadRandomClientConfigTime
+  loadRandomClientConfigTimeMinsIncr=$_loadRandomClientConfigTimeMinsIncr
   loadRandomClientConfigSkipModulo=$_loadRandomClientConfigSkipModulo
 
   pingTargets=$_pingTargets
@@ -548,8 +601,10 @@ ShowUsage()
   echo "                   (0 to disable)"
   echo ""
   echo "   -m <Time>     Load another client config after time in 24h format            (default: $_loadRandomClientConfigTime)"
-  echo "                   e.g. 345 for 3:45am". Can combine with \"-l\"" arg above"
-  echo "                   (0 to disable - this includes 12am)"
+  echo "                   e.g. 345 for 3:45am, or 25 for 12:45am. Can combine"
+  echo "                   with \"-l\" arg above (0 to disable - this includes 12am)"
+  echo ""
+  echo "   -mm <Minutes>   Random modulo amount of minutes to add to -m arg             (default: $_loadRandomClientConfigTimeMinsIncr)"
   echo ""
   echo "   -s <Amount>   Modulo to apply when skipping random amount of client configs  (default: $_loadRandomClientConfigSkipModulo)"
   echo "                   with \"-l\" and/or \"-m\"  args above, e.g. 3 will skip 0,1,or 2"
@@ -729,6 +784,13 @@ Main()
       # finished with this after initial client config started/attached
       attachToRunningClient=0
       runningConfigItem=0
+
+      # calc time to expire client config, if required
+      expireClientConfigTime=$loadRandomClientConfigTime
+      if [ $loadRandomClientConfigTime -ne 0 ] && [ $loadRandomClientConfigTimeMinsIncr -ne 0 ]; then
+        expireClientConfigTime=$( AddRndMins $expireClientConfigTime $loadRandomClientConfigTimeMinsIncr )
+      fi
+      echo "=== expireClientConfigTime: $expireClientConfigTime"
       
       # commence monitoring client health
       lhs=0
@@ -919,10 +981,8 @@ Main()
           day=$(( $(date +"%d" | sed 's/^0*//') ))
           if [ $loadRandWaitCurrDay -eq 0 ] || [ $day -ne $loadRandWaitCurrDay ]; then
             now=$(date +"%H%M" | sed 's/^0*//')
-            if [ "$now" == "" ]; then
-              now=0
-            fi
-            if [ $now -ge $loadRandomClientConfigTime ]; then
+            [ "$now" == "" ] && now=0
+            if [ $now -ge $expireClientConfigTime ]; then
               loadRandTime=1
               loadRandWaitCurrDay=$day
             fi
@@ -938,17 +998,12 @@ Main()
           if [ $loadRandTime -ne 0 ]; then
             loadRand=true
             loadRandMsg=$loadRandMsg" (handshake #$nhs >= -l #$loadRandomClientConfigAfterNthHandshake)"
-            if [ $loadRandTime -eq 1 ]; then
-              loadRandMsg=$loadRandMsg" (current time #$now >= -m #$loadRandomClientConfigTime)"
-            fi
           fi
         elif [ $loadRandNth -eq -1 ]; then
-          if [ $loadRandTime -eq 1 ]; then
-            loadRand=true
-            loadRandMsg=$loadRandMsg" (current time #$now >= -m #$loadRandomClientConfigTime)"
-          fi
+          [ $loadRandTime -eq 1 ] && loadRand=true
         fi
         if [ "$loadRand" = true ]; then
+          [ $loadRandTime -eq 1 ] && loadRandMsg=$loadRandMsg" (current time #$now >= $expireClientConfigTime (-m #$loadRandomClientConfigTime, -mm #$loadRandomClientConfigTimeMinsIncr)"
           if [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
             RND_255
             skipClientConfigs=$(( $? % $loadRandomClientConfigSkipModulo ))
