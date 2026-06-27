@@ -144,7 +144,7 @@ ParseArgs()
                   echo set loadRandomClientConfigSkipModulo: $arg
                   loadRandomClientConfigSkipModulo=$arg
               else
-                LogSlack "unrecognised var \'$var\' - discarding that and arg \'$arg\'"
+                LogSlack "Unrecognised var \'$var\' - discarding that and arg \'$arg\'"
               fi
             else
               if [ $var == "--failoverconfigpath" ]; then
@@ -178,29 +178,29 @@ ParseArgs()
                 echo set curlTargets: $arg
                 curlTargets=$arg
               else
-                LogSlack "param arg \'$arg\' for var \'$var\' is not a number - discarding both"
+                LogSlack "Param arg \'$arg\' for var \'$var\' is not a number - discarding both"
               fi
             fi
           else
-            LogSlack "var is unset - discarding arg \'$arg\'"
+            LogSlack "Var is unset - discarding arg \'$arg\'"
           fi
           unset var
       fi
     done
     if [ -n "$var" ]; then
-      LogSlack "var \'$var\' was not followed by param arg - discarded"
+      LogSlack "Var \'$var\' was not followed by param arg - discarded"
     fi
   fi
 }
 
 ArgCmdLineOnly()
 {
-  LogSlack "\'$1\' option is only valid from the command line' - discarding along with arg \'$2\'"
+  LogSlack "The \'$1\' option is only valid from the command line' - discarding along with arg \'$2\'"
 }
 
 #ArgFailoverConfigOnly()
 #{
-#  LogSlack "\'$1\' option is only valid from within the failover config' - discarding along with arg \'$2\'"
+#  LogSlack "The \'$1\' option is only valid from within the failover config' - discarding along with arg \'$2\'"
 #}
 
 StartTimer()
@@ -223,9 +223,9 @@ Exit()
 {
   code=$1
   shift
-  msg="EXITING:\n\texit code:\n\t\t$code\n\treason:\n\t\t""$@"
+  msg="EXITING:\n\tExit code:\n\t\t$code\n\tReason:\n\t\t""$@"
   if [ -n "$upSince" ]; then
-    msg=$msg"\n\n\tfinal client config [$wgClientConfigFilePath], active since: $upSince\n "
+    msg=$msg"\n\n\tFinal client config [$wgClientConfigFilePath], active since: $upSince\n "
   fi
   LogSlack $msg
 
@@ -402,7 +402,7 @@ DetectExternalRunningClientConfigChange()
     return 0
   fi
 
-  LogSlack "CONNECTIVITY CHANGE: the monitored client config \'$wgClientDescription\' has externally changed to \'$runningDescr\'"
+  LogSlack "CONNECTIVITY CHANGE: The monitored client config \'$wgClientDescription\' has externally changed to \'$runningDescr\'"
   wgClientDescription=$runningDescr
   upSince=$(date +"%d-%m-%y %T") # somewhere between now and after prior handshake wait
 
@@ -690,7 +690,7 @@ Init()
   ParseArgs 0 $@
 
   # send command line to slack, if path now set
-  Slack "command line: $0 $@"
+  Slack "Command line: $0 $@"
 
   # check overridden failover config path
   if [ "$failoverConfigPath" != "" ]; then
@@ -776,7 +776,7 @@ Main()
         LoadAndStartClientConfig $wgClientConfigFilePath
         if [ $? -eq 0 ]; then
           # try next config instead
-          LogSlack "FILE FAIL: couldn't load the client config \'$wgClientConfigFilePath\', will try next"
+          LogSlack "FILE FAIL: Couldn't load the client config \'$wgClientConfigFilePath\', will try next"
           continue
         fi
       fi
@@ -789,6 +789,7 @@ Main()
       expireClientConfigTime=$loadRandomClientConfigTime
       if [ $loadRandomClientConfigTime -ne 0 ] && [ $loadRandomClientConfigTimeMinsIncr -ne 0 ]; then
         expireClientConfigTime=$( AddRndMins $expireClientConfigTime $loadRandomClientConfigTimeMinsIncr )
+        LogSlack "Client config due to expire at around $expireClientConfigTime"
       fi
       echo "=== expireClientConfigTime: $expireClientConfigTime"
       
@@ -816,7 +817,7 @@ Main()
         if [ $wgcEnabled -ne 1 ]; then
           LogSlack "INTERFACE FAIL: $wgc is disabled - will enable"
           nvram set "$wgc"_enable=1
-          sleep 5
+          sleep 15
         fi
 
         wgShow=$(wg show $wgc latest-handshakes 2>&1)
@@ -826,31 +827,29 @@ Main()
         echod "=== ifconfig $wgc: $ifconfig"
 
         # handle interface being shutdown, possibly in router ui
+        ifaceFound=0
         if [ "$wgShow" == "Unable to access interface: No such device" ] || [ "$ifconfig" == "ifconfig: $wgc: error fetching interface information: Device not found" ]; then
           failMsg="INTERFACE FAIL: $wgc not found"
           if [ $quitOnNoInterface -eq 0 ]; then
-            #LogSlack "$failMsg - expiring current client config"
-            ##Log "$wgClientDescription: client config active since: "$upSince
-            #break
-
-            LogSlack "$failMsg - unhandled - what to do here..."
-
+            LogSlack $failMsg
           else
             Exit 3 "$failMsg (with quitOnNoInterface enabled)"
           fi
-        fi
+        else
+          ifaceFound=1
 
-        # calc how much time passed since last handshake
-        dateNow=$(date +%s);                        echo dateNow: $dateNow
-        dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
-        IsNumber "$dateLhs" # will also catch blank value
-        if [ $? -eq 0 ]; then
-          Log "HANDSHAKE ANOMALY: handshake date '$dateLhs' is not a number - setting to zero"
-          dateLhs=0;
+          # calc how much time passed since last handshake
+          dateNow=$(date +%s);                        echo dateNow: $dateNow
+          dateLhs=`echo $wgShow | awk '{print $2}'`;  echo dateLhs: $dateLhs
+          IsNumber "$dateLhs" # will also catch blank value
+          if [ $? -eq 0 ]; then
+            Log "HANDSHAKE ANOMALY: handshake date '$dateLhs' is not a number - setting to zero"
+            dateLhs=0;
+          fi
         fi
 
         # zero lhs date seems to indicate client stopped
-        if [ $dateLhs -eq 0 ]; then
+        if [ $ifaceFound -eq 0 ] || [ $dateLhs -eq 0 ]; then
           clientMaybeStopped=$(( $clientMaybeStopped + 1 ))
         else
           clientMaybeStopped=0
@@ -859,19 +858,19 @@ Main()
         # don't immediately expire client config if client apparently stopped on the first occasion in a row
         if [ $clientMaybeStopped -eq 1 ]; then
           adv=25
-          LogSlack "HANDSHAKE ANOMALY: handshake date was blank, #0, or not a number - assuming client is stopped (for the first time in a row), restarting client and will try again after $adv secs"
+          LogSlack "INTERFACE/HANDSHAKE ANOMALY: Interface not found, or handshake date was blank, #0 or not a number - assuming client is stopped (for the first time in a row), restarting client and will try again after $adv secs"
           service "restart_wgc $clientNum"
         else
           if [ $clientMaybeStopped -eq 0 ]; then
             lhs=$(( $dateNow - $dateLhs ));   echo lhs: $lhs
           else
-            LogSlack "HANDSHAKE FAIL: no handshake - assuming client is stopped, switching to next client config"
+            LogSlack "HANDSHAKE FAIL: No handshake - assuming client is stopped, switching to next client config"
             break;
           fi
 
           # fail if lhs is nonsense
           if [ -z $lhs ] || [ -z $dateNow ] || [ $lhs -gt 1000000000 ]; then
-            LogSlack "HANDSHAKE FAIL: value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
+            LogSlack "HANDSHAKE FAIL: Value is nonsense\n\t\tdateNow: $dateNow\n\t\tdateLhs: $dateLhs\n\t\tlhs: $lhs"
             testsFailed="+Handshake"
           fi
 
@@ -932,7 +931,7 @@ Main()
 
           # give up on this client config if out of action for too long
           if [ $lhs -ge $hsTimeout ]; then
-            LogSlack "HANDSHAKE FAIL: stale value of $lhs secs >= $hsTimeout, switching to next client config"
+            LogSlack "HANDSHAKE FAIL: Stale value of $lhs secs >= $hsTimeout, switching to next client config"
             break
           fi
         fi
@@ -951,10 +950,10 @@ Main()
             LogSlack "CONNECTIVITY CHANGE: Continuing to monitor the externally loaded client config, although NOT in failover config (change behaviour by adding \'--qoneuccc\' arg)"
           fi
         elif [ $ret -eq 3 ]; then
-          LogSlack "CONNECTIVITY CHANGE: settings \'$compareClientConfigDiff\' changed on router from the monitored client config \'$wgClientDescription\', will reload"
+          LogSlack "CONNECTIVITY CHANGE: Settings \'$compareClientConfigDiff\' changed on router from the monitored client config \'$wgClientDescription\', will reload"
           LoadAndStartClientConfig $wgClientConfigFilePath
           if [ $? -eq 0 ]; then
-            LogSlack "FILE FAIL: couldn't reload the client config \'$wgClientConfigFilePath\', will try next"
+            LogSlack "FILE FAIL: Couldn't reload the client config \'$wgClientConfigFilePath\', will try next"
             runningConfigItem=0
             break
           fi
@@ -993,7 +992,7 @@ Main()
         echo "=== loadRandNth=$loadRandNth, loadRandTime=$loadRandTime, loadRandWaitCurrDay=$loadRandWaitCurrDay"
 
         loadRand=false
-        loadRandMsg="expiring the current client config to load another, reason(s):"
+        loadRandMsg="Expiring the current client config to load another, reason(s):"
         if [ $loadRandNth -eq 1 ]; then
           if [ $loadRandTime -ne 0 ]; then
             loadRand=true
@@ -1386,7 +1385,7 @@ LoadAndStartClientConfig()
   echod "LoadAndStartClientConfig: $path"
 
   if ! [ -f $path ]; then
-    LogSlack "FILE FAIL: client config path \'$wgClientConfigFilePath\' is invalid - trying next"
+    LogSlack "FILE FAIL: Client config path \'$wgClientConfigFilePath\' is invalid - trying next"
     wgClientConfigFilePath=""
     clientConfigSucc=0
     return 0
