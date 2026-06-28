@@ -787,8 +787,8 @@ Main()
 
       # calc time to expire client config, if required
       expireClientConfigTime=$loadRandomClientConfigTime
-      if [ $loadRandomClientConfigTime -ne 0 ] && [ $loadRandomClientConfigTimeMinsIncr -ne 0 ]; then
-        expireClientConfigTime=$( AddRndMins $expireClientConfigTime $loadRandomClientConfigTimeMinsIncr )
+      if [ $loadRandomClientConfigTime -ne 0 ]; then
+        [ $loadRandomClientConfigTimeMinsIncr -ne 0 ] && expireClientConfigTime=$( AddRndMins $expireClientConfigTime $loadRandomClientConfigTimeMinsIncr );
         LogSlack "Client config due to expire at around $expireClientConfigTime"
       fi
       echo "=== expireClientConfigTime: $expireClientConfigTime"
