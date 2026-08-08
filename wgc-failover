@@ -680,6 +680,9 @@ Init()
   fi
   wgc="wgc"$clientNum
 
+  expireExpireCmdPath="/tmp/wgc-failover-expire-"$clientNum
+  rm -f $expireExpireCmdPath
+
   # fetch wan interface names
   wan0=$(nvram get wan0_ifname)
   wan1=$(nvram get wan1_ifname)
@@ -749,11 +752,21 @@ Main()
   LogSlack "Loading failover config: $wgFailoverConfigFilePath"
   sleep 1
 
-  if [ $attachToRunningClient -ne 0 ]; then
+  if [ $attachToRunningClient -ne 0 ] || [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
     FindRunningClientConfig
     runningConfigItem=$?
     if [ $runningConfigItem -ne 0 ]; then
       echod "=== running client config: $runningConfigItem"
+
+      # not set to attach but skip modulo set
+      if [ $attachToRunningClient -eq 0 ]; then
+        RND_255
+        skipClientConfigs=$(( $? % $loadRandomClientConfigSkipModulo ))
+        skipClientConfigs=$(( $skipClientConfigs + $runningConfigItem ))
+        echod "=== initial skipClientConfigs: $skipClientConfigs"
+        LogSlack "Found loaded client config ($runningConfigItem), skipping the first #$skipClientConfigs configs (no '--attachtorunningclient' arg) (-s #$loadRandomClientConfigSkipModulo)"
+        runningConfigItem=0
+      fi
     fi
   fi
 
@@ -967,40 +980,50 @@ Main()
         # check/handle if a random client config load is due
         loadRandNth=0
         loadRandTime=0
+        loadRand=false
+        loadRandMsg="Expiring the current client config to load another, reason(s):"
 
-        if [ $loadRandomClientConfigAfterNthHandshake -eq 0 ]; then
-          loadRandNth=-1
-        elif [ $nhs -ge $loadRandomClientConfigAfterNthHandshake ]; then
-          loadRandNth=1
-        fi
+        day=$(( $(date +"%d" | sed 's/^0*//') ))
 
-        if [ $loadRandomClientConfigTime -eq 0 ]; then
-          loadRandTime=-1
+        # check for presence of expire cmd file
+        if [ -f $expireExpireCmdPath ]; then
+          rm -f $expireExpireCmdPath
+          loadRand=true
+          loadRandMsg=$loadRandMsg" (expire client config cmd file detected)"
+          loadRandWaitCurrDay=$day
         else
-          day=$(( $(date +"%d" | sed 's/^0*//') ))
-          if [ $loadRandWaitCurrDay -eq 0 ] || [ $day -ne $loadRandWaitCurrDay ]; then
-            now=$(date +"%H%M" | sed 's/^0*//')
-            [ "$now" == "" ] && now=0
-            if [ $now -ge $expireClientConfigTime ]; then
-              loadRandTime=1
-              loadRandWaitCurrDay=$day
+          if [ $loadRandomClientConfigAfterNthHandshake -eq 0 ]; then
+            loadRandNth=-1
+          elif [ $nhs -ge $loadRandomClientConfigAfterNthHandshake ]; then
+            loadRandNth=1
+          fi
+
+          if [ $loadRandomClientConfigTime -eq 0 ]; then
+            loadRandTime=-1
+          else
+            if [ $loadRandWaitCurrDay -eq 0 ] || [ $day -ne $loadRandWaitCurrDay ]; then
+              now=$(date +"%H%M" | sed 's/^0*//')
+              [ "$now" == "" ] && now=0
+              if [ $now -ge $expireClientConfigTime ]; then
+                loadRandTime=1
+                loadRandWaitCurrDay=$day
+              fi
             fi
+          fi
+
+          if [ $loadRandNth -eq 1 ]; then
+            if [ $loadRandTime -ne 0 ]; then
+              loadRand=true
+              loadRandMsg=$loadRandMsg" (handshake #$nhs >= -l #$loadRandomClientConfigAfterNthHandshake)"
+            fi
+          elif [ $loadRandNth -eq -1 ]; then
+            [ $loadRandTime -eq 1 ] && loadRand=true
           fi
         fi
 
         echo ""
         echo "=== loadRandNth=$loadRandNth, loadRandTime=$loadRandTime, loadRandWaitCurrDay=$loadRandWaitCurrDay"
 
-        loadRand=false
-        loadRandMsg="Expiring the current client config to load another, reason(s):"
-        if [ $loadRandNth -eq 1 ]; then
-          if [ $loadRandTime -ne 0 ]; then
-            loadRand=true
-            loadRandMsg=$loadRandMsg" (handshake #$nhs >= -l #$loadRandomClientConfigAfterNthHandshake)"
-          fi
-        elif [ $loadRandNth -eq -1 ]; then
-          [ $loadRandTime -eq 1 ] && loadRand=true
-        fi
         if [ "$loadRand" = true ]; then
           [ $loadRandTime -eq 1 ] && loadRandMsg=$loadRandMsg" (current time #$now >= $expireClientConfigTime (-m #$loadRandomClientConfigTime, -mm #$loadRandomClientConfigTimeMinsIncr)"
           if [ $loadRandomClientConfigSkipModulo -ne 0 ]; then
@@ -1416,6 +1439,7 @@ LoadAndStartClientConfig()
   sleep 3
 
   clientMaybeStopped=0
+  rm -f $expireExpireCmdPath
 
   return 1
 }
